@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#EFE9DC">
+<title>Stundenbuch</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<style>
+:root{
+  --grund:#EFE9DC; --karte:#F8F5EE; --holz:#26201A;
+  --linie:#D9CFBB; --grau:#847865;
+  --zollstock:#E3A008; --gruen:#5C7F3F; --rot:#B23A2C;
+  --schrift: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --rand:16px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--grund);color:var(--holz);font-family:var(--schrift);
+  font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%;}
+button,input,select,textarea{font-family:inherit;font-size:16px;color:inherit;}
+:focus-visible{outline:3px solid var(--zollstock);outline-offset:2px;}
+.zahl{font-variant-numeric:tabular-nums;}
+img{max-width:100%;}
+
+.kopf{position:sticky;top:0;z-index:20;background:var(--grund);
+  border-bottom:1px solid var(--linie);
+  padding:calc(10px + env(safe-area-inset-top)) var(--rand) 10px;
+  display:flex;align-items:baseline;gap:10px;}
+.kopf h1{margin:0;font-size:19px;font-weight:700;letter-spacing:-.02em;}
+.kopf .wer{margin-left:auto;font-size:13px;color:var(--grau);}
+.kopf .wer button{background:none;border:0;color:var(--grau);text-decoration:underline;
+  padding:0;cursor:pointer;font-size:13px;}
+
+main{padding:var(--rand) var(--rand) 24px;max-width:720px;margin:0 auto;}
+h2{font-size:15px;font-weight:700;margin:0 0 12px;letter-spacing:-.01em;}
+h2.abstand{margin-top:28px;}
+h2 .nebenzahl{float:right;color:var(--grau);font-weight:400;}
+p.hinweis{font-size:13.5px;color:var(--grau);margin:0 0 14px;max-width:62ch;}
+
+.karte{background:var(--karte);border:1px solid var(--linie);border-radius:6px;
+  padding:14px;margin-bottom:12px;}
+
+.feld{margin-bottom:14px;}
+.feld label{display:block;font-size:13.5px;font-weight:600;margin-bottom:5px;}
+.feld label.zeileninhalt{display:flex;align-items:center;gap:9px;font-weight:500;}
+.feld input,.feld select,.feld textarea{width:100%;padding:11px 12px;background:var(--karte);
+  border:1px solid var(--linie);border-radius:5px;}
+.feld input[type=checkbox]{width:auto;}
+.feld input:focus,.feld select:focus{border-color:var(--holz);}
+.zeile{display:flex;gap:10px;}
+.zeile>*{flex:1;min-width:0;}
+
+.knopf{display:block;width:100%;padding:15px;background:var(--holz);color:var(--grund);
+  border:0;border-radius:5px;font-weight:700;cursor:pointer;}
+.knopf:disabled{opacity:.4;}
+.knopf.zweit{background:none;color:var(--holz);border:1px solid var(--linie);font-weight:600;}
+.knopf.gefahr{background:none;color:var(--rot);border:1px solid var(--rot);font-weight:600;}
+.knopf+.knopf{margin-top:8px;}
+.knopf.klein{width:auto;padding:8px 13px;font-size:14px;}
+
+button.tat{display:block;width:100%;text-align:left;padding:13px 14px;margin-bottom:8px;
+  background:var(--karte);border:1px solid var(--linie);border-left:5px solid var(--linie);
+  border-radius:5px;cursor:pointer;}
+button.tat[data-art="wert"]{border-left-color:var(--gruen);}
+button.tat[data-art="noetig"]{border-left-color:var(--zollstock);}
+button.tat[data-art="verlust"]{border-left-color:var(--rot);}
+button.tat.aktiv{background:#EDE4CE;border-color:var(--holz);}
+button.tat small{display:block;color:var(--grau);font-size:12.5px;}
+
+/* ---- Tagesnavigation ---- */
+.tagnav{display:flex;align-items:center;gap:8px;margin-bottom:14px;}
+.tagnav button{background:var(--karte);border:1px solid var(--linie);border-radius:5px;
+  width:44px;height:44px;font-size:19px;cursor:pointer;flex:none;}
+.tagnav .datum{flex:1;text-align:center;font-weight:700;font-size:16px;}
+.tagnav .datum small{display:block;font-weight:400;font-size:12.5px;color:var(--grau);}
+
+/* ---- Stufenregler ---- */
+.stufen{display:flex;align-items:center;gap:10px;}
+.stufen button{width:52px;height:52px;flex:none;background:var(--karte);
+  border:1px solid var(--linie);border-radius:5px;font-size:24px;font-weight:700;cursor:pointer;}
+.stufen input{flex:1;text-align:center;font-size:26px;font-weight:700;
+  font-variant-numeric:tabular-nums;padding:10px 4px;background:var(--karte);
+  border:1px solid var(--linie);border-radius:5px;-moz-appearance:textfield;}
+.stufen input::-webkit-outer-spin-button,.stufen input::-webkit-inner-spin-button{
+  -webkit-appearance:none;margin:0;}
+.stufen .einheit{font-size:15px;color:var(--grau);flex:none;width:18px;}
+
+/* ---- Tagesbilanz ---- */
+.bilanz{border:1px solid var(--linie);border-radius:6px;background:var(--karte);
+  padding:13px 14px;margin-bottom:14px;}
+.bilanz .oben{display:flex;justify-content:space-between;font-size:14.5px;}
+.bilanz .rest{margin-top:9px;padding-top:9px;border-top:1px solid var(--linie);
+  display:flex;justify-content:space-between;font-weight:700;font-size:15px;}
+.bilanz .rest[data-s="offen"]{color:#9A7005;}
+.bilanz .rest[data-s="voll"]{color:var(--gruen);}
+.bilanz .rest[data-s="zuviel"]{color:var(--rot);}
+
+/* ---- Buchungszeilen ---- */
+.zeilen{background:var(--karte);border:1px solid var(--linie);border-radius:6px;
+  overflow:hidden;margin-bottom:14px;}
+.buchung{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;
+  border-bottom:1px solid var(--linie);width:100%;background:none;border-left:0;
+  border-right:0;border-top:0;text-align:left;cursor:pointer;}
+.buchung:last-child{border-bottom:0;}
+.buchung:active{background:#F1ECE1;}
+.buchung .strich{width:4px;align-self:stretch;border-radius:2px;background:var(--linie);flex:none;}
+.buchung .strich[data-art="wert"]{background:var(--gruen);}
+.buchung .strich[data-art="noetig"]{background:var(--zollstock);}
+.buchung .strich[data-art="verlust"]{background:var(--rot);}
+.buchung .mitte{flex:1;min-width:0;}
+.buchung strong{font-size:15px;font-weight:700;display:block;}
+.buchung small{color:var(--grau);font-size:12.5px;display:block;}
+.buchung .h{font-weight:700;font-size:15.5px;white-space:nowrap;}
+.marke{display:inline-block;font-size:11.5px;font-weight:700;padding:1px 6px;
+  border-radius:3px;background:#F6E3B8;color:#7A5800;margin-top:3px;}
+
+/* ---- Zollstock-Skala ---- */
+.skala{position:relative;height:34px;margin:10px 0 6px;background:#E7DFCE;
+  border:1px solid var(--linie);border-radius:3px;overflow:hidden;}
+.skala .fuellung{position:absolute;left:0;top:0;bottom:0;width:var(--ist,0%);background:var(--zollstock);}
+.skala .fuellung.ueber{background:var(--rot);}
+.skala .striche{position:absolute;inset:0;background-image:repeating-linear-gradient(
+  to right, rgba(38,32,26,.42) 0 1px, transparent 1px var(--tick,10%));}
+.skala .soll{position:absolute;top:-2px;bottom:-2px;left:var(--soll,100%);width:3px;
+  margin-left:-1.5px;background:var(--holz);}
+.skala .soll::after{content:"";position:absolute;top:0;left:-4px;
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:6px solid var(--holz);}
+.skalatext{display:flex;justify-content:space-between;font-size:12.5px;color:var(--grau);}
+.stand{font-size:13px;font-weight:700;}
+.stand[data-s="gruen"]{color:var(--gruen);}
+.stand[data-s="gelb"]{color:#9A7005;}
+.stand[data-s="rot"]{color:var(--rot);}
+.stand[data-s="grau"]{color:var(--grau);}
+
+.auftragkopf{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
+.auftragkopf strong{font-size:15.5px;letter-spacing:-.01em;}
+.auftragkopf .nr{font-size:12.5px;color:var(--grau);white-space:nowrap;}
+.kunde{font-size:13.5px;color:var(--grau);margin:2px 0 0;}
+
+.kennzahl{display:flex;justify-content:space-between;gap:12px;padding:9px 0;
+  border-bottom:1px solid var(--linie);font-size:14.5px;}
+.kennzahl:last-child{border-bottom:0;}
+.balken{height:9px;background:#E7DFCE;border-radius:2px;overflow:hidden;margin-top:5px;}
+.balken i{display:block;height:100%;background:var(--holz);}
+.balken i.wert{background:var(--gruen);}
+.balken i.noetig{background:var(--zollstock);}
+.balken i.verlust{background:var(--rot);}
+
+.uhr{background:var(--holz);color:var(--grund);border-radius:6px;padding:16px;margin-bottom:14px;}
+.uhr .zeit{font-size:38px;font-weight:700;letter-spacing:-.03em;line-height:1;}
+.uhr small{display:block;opacity:.75;font-size:13px;margin-bottom:8px;}
+.uhr button{margin-top:12px;width:100%;padding:12px;background:var(--zollstock);
+  color:var(--holz);border:0;border-radius:5px;font-weight:700;cursor:pointer;}
+
+nav{position:sticky;bottom:0;z-index:20;display:flex;background:var(--karte);
+  border-top:1px solid var(--linie);padding-bottom:env(safe-area-inset-bottom);}
+nav button{flex:1;padding:11px 3px 10px;background:none;border:0;border-top:3px solid transparent;
+  font-size:11.5px;font-weight:600;color:var(--grau);cursor:pointer;margin-top:-1px;}
+nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
+
+.meldung{position:fixed;left:50%;transform:translateX(-50%);bottom:76px;z-index:60;
+  background:var(--holz);color:var(--grund);padding:11px 18px;border-radius:22px;
+  font-size:14px;font-weight:600;max-width:88vw;text-align:center;}
+.warnung{background:#F6E3B8;border:1px solid var(--zollstock);border-radius:5px;
+  padding:10px 12px;font-size:13.5px;margin-bottom:12px;}
+.leer{color:var(--grau);font-size:14px;padding:20px 0;text-align:center;}
+.trenner{height:1px;background:var(--linie);margin:22px 0;}
+.vorschau{margin-top:8px;border:1px solid var(--linie);border-radius:5px;max-height:180px;}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;}}
+</style>
+</head>
+<body>
+
+<header class="kopf">
+  <h1>Stundenbuch</h1>
+  <span class="wer" id="wer"></span>
+</header>
+
+<main id="inhalt"></main>
+
+<nav id="nav" hidden>
+  <button data-ansicht="tag">Tag</button>
+  <button data-ansicht="woche">Woche</button>
+  <button data-ansicht="auftraege">Aufträge</button>
+  <button data-ansicht="auswertung" data-fuehrung="1">Auswertung</button>
+  <button data-ansicht="verwaltung" data-fuehrung="1">Verwaltung</button>
+</nav>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   1. Zustand
+   ===================================================================== */
+const S = {
+  cfg:   laden("cfg", null),
+  ich:   laden("ich", null),
+  queue: laden("queue", []),
+  uhr:   laden("uhr", null),
+  cache: laden("cache", {}),
+  ansicht: "tag",
+  tag: heute(),
+  form: null,     // offenes Erfassungsformular
+  aform: null,    // offenes Auftragsformular
+  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [],
+  einst: {rueckmeldung:"0"},
+  online: navigator.onLine
+};
+
+function laden(k,f){ try{const v=localStorage.getItem("sb_"+k); return v===null?f:JSON.parse(v);}catch(e){return f;} }
+function sichern(k,v){ try{localStorage.setItem("sb_"+k, JSON.stringify(v));}catch(e){} }
+
+/* =====================================================================
+   2. Hilfen
+   ===================================================================== */
+const el = (id) => document.getElementById(id);
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function zahl(n,k){ const v=Number(n)||0; return v.toFixed(k===undefined?2:k).replace(".",","); }
+function isoVon(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function heute(){ return isoVon(new Date()); }
+function verschieben(iso,tage){ const d=new Date(iso+"T12:00:00"); d.setDate(d.getDate()+tage); return isoVon(d); }
+function vorTagen(n){ return verschieben(heute(),-n); }
+function datumKurz(iso){ const t=String(iso).split("-"); return t[2]+"."+t[1]+"."; }
+function datumLang(iso){ const t=String(iso).split("-"); return t[2]+"."+t[1]+"."+t[0]; }
+function wochentag(iso){ return ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][new Date(iso+"T12:00:00").getDay()]; }
+function uid(){ return "c"+Date.now().toString(36)+Math.random().toString(36).slice(2,9); }
+function komma(v){ return Number(String(v==null?"":v).replace(",", ".")); }
+function viertel(v){ return Math.round(Number(v)*4)/4; }
+
+let meldTimer=null;
+function melden(text){
+  const alt=document.querySelector(".meldung"); if(alt) alt.remove();
+  const d=document.createElement("div");
+  d.className="meldung"; d.setAttribute("role","status"); d.textContent=text;
+  document.body.appendChild(d);
+  clearTimeout(meldTimer); meldTimer=setTimeout(()=>d.remove(),2800);
+}
+
+// Klasse einer Tätigkeit: wert (am Werkstück) / noetig (nötig, berechenbar) / verlust
+function tatArt(t){
+  if(!t) return "";
+  if(t.wertschoepfend) return "wert";
+  return t.verrechenbar ? "noetig" : "verlust";
+}
+function tatBeschreibung(t){
+  if(t.wertschoepfend) return "am Werkstück";
+  return t.verrechenbar ? "notwendig, wird berechnet" : "Zeitverlust – bitte trotzdem buchen";
+}
+
+/* =====================================================================
+   3. Datenbank
+   ===================================================================== */
+async function sb(pfad, opt){
+  if(!S.cfg) throw new Error("Keine Verbindung eingerichtet");
+  opt = opt || {};
+  const kopf = {"apikey":S.cfg.key, "Authorization":"Bearer "+S.cfg.key, "Content-Type":"application/json"};
+  if(opt.prefer) kopf["Prefer"] = opt.prefer;
+  const r = await fetch(S.cfg.url.replace(/\/+$/,"")+"/rest/v1/"+pfad, {
+    method: opt.method||"GET", headers: kopf,
+    body: opt.body ? JSON.stringify(opt.body) : undefined
+  });
+  if(!r.ok){
+    let t=""; try{ t=await r.text(); }catch(e){}
+    throw new Error("Datenbank meldet "+r.status+(t? ": "+t.slice(0,200):""));
+  }
+  if(r.status===204) return null;
+  const txt = await r.text();
+  return txt ? JSON.parse(txt) : null;
+}
+
+async function datenHolen(){
+  try{
+    const [a,t,m,z,an,e] = await Promise.all([
+      sb("auftraege?select=*&order=status.asc,nummer.desc"),
+      sb("taetigkeiten?select=*&aktiv=is.true&order=sortierung.asc"),
+      sb("mitarbeiter?select=id,name,rolle,pin,aktiv&aktiv=is.true&order=name.asc"),
+      sb("zeiten?select=id,client_id,auftrag_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
+      sb("anwesenheit?select=*&datum=gte."+vorTagen(90)),
+      sb("einstellungen?select=*")
+    ]);
+    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[];
+    S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
+    if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
+    S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
+             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst};
+    sichern("cache",S.cache);
+    S.online=true;
+  }catch(err){
+    S.online=false;
+    const c=S.cache||{};
+    S.auftraege=c.auftraege||[]; S.taetigkeiten=c.taetigkeiten||[]; S.mitarbeiter=c.mitarbeiter||[];
+    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"};
+    if(S.cfg && S.ich) melden("Offline – letzter bekannter Stand");
+  }
+}
+
+/* ---------- Warteschlange ---------- */
+async function queueSenden(){
+  if(!S.queue.length || !S.cfg) return;
+  const rest=[];
+  for(const p of S.queue){
+    try{ await sb(p.pfad, {method:"POST", body:p.body, prefer:p.prefer}); }
+    catch(e){ rest.push(p); }
+  }
+  const weg = S.queue.length - rest.length;
+  S.queue=rest; sichern("queue",S.queue);
+  if(weg>0) melden(weg+" Eintrag/Einträge übertragen");
+}
+async function senden(pfad, body, prefer, typ){
+  const p = {pfad, body, prefer, typ};
+  try{ await sb(pfad, {method:"POST", body, prefer}); return true; }
+  catch(e){ S.queue.push(p); sichern("queue",S.queue); return false; }
+}
+
+/* =====================================================================
+   4. Berechnung
+   ===================================================================== */
+function alleZeiten(){
+  return S.zeiten.concat(
+    S.queue.filter(q=>q.typ==="zeit").map(q=>Object.assign({},q.body,{id:q.body.client_id,_wartet:true}))
+  );
+}
+function zeitenVon(mid, datum){ return alleZeiten().filter(z=>z.mitarbeiter_id===mid && z.datum===datum); }
+function istStunden(aid){ return alleZeiten().reduce((s,z)=> z.auftrag_id===aid ? s+Number(z.stunden||0) : s, 0); }
+function meineStunden(aid){ return alleZeiten().reduce((s,z)=> (z.auftrag_id===aid && z.mitarbeiter_id===S.ich.id) ? s+Number(z.stunden||0) : s, 0); }
+function anwesend(mid, datum){
+  const w = S.queue.filter(q=>q.typ==="anw" && q.body.mitarbeiter_id===mid && q.body.datum===datum).pop();
+  if(w) return Number(w.body.stunden);
+  const r = S.anwesenheit.find(x=>x.mitarbeiter_id===mid && x.datum===datum);
+  return r ? Number(r.stunden) : null;
+}
+function summe(liste){ return liste.reduce((s,z)=>s+Number(z.stunden||0),0); }
+function taet(id){ return S.taetigkeiten.find(t=>t.id===id); }
+function auftrag(id){ return S.auftraege.find(a=>a.id===id); }
+function person(id){ return S.mitarbeiter.find(m=>m.id===id); }
+
+function stand(ist, soll){
+  soll=Number(soll)||0;
+  if(soll<=0) return {s:"grau", text:"ohne Vorgabe"};
+  const p=ist/soll;
+  if(p>1)   return {s:"rot",  text:"über Maß"};
+  if(p>=.8) return {s:"gelb", text:"knapp"};
+  return {s:"gruen", text:"im Maß"};
+}
+function schrittWeite(max){
+  const roh=max/12;
+  for(const k of [0.5,1,2,5,10,20,25,50,100,200]) if(roh<=k) return k;
+  return 500;
+}
+function skalaHtml(ist, soll){
+  soll=Number(soll)||0;
+  const max=Math.max(ist,soll,1)*1.12;
+  const istP=Math.min(100,ist/max*100), sollP=Math.min(100,soll/max*100);
+  const tick=Math.max(3, schrittWeite(max)/max*100);
+  const st=stand(ist,soll);
+  return '<div class="skala" style="--ist:'+istP.toFixed(1)+'%;--soll:'+sollP.toFixed(1)+'%;--tick:'+tick.toFixed(2)+'%">'
+    + '<div class="fuellung'+(st.s==="rot"?" ueber":"")+'"></div><div class="striche"></div>'
+    + (soll>0?'<div class="soll"></div>':'') + '</div>'
+    + '<div class="skalatext"><span class="zahl">Soll '+zahl(soll,1)+' h · Ist '+zahl(ist,1)+' h</span>'
+    + '<span class="stand" data-s="'+st.s+'">'+(soll>0?(ist>soll?"+":"")+zahl(ist-soll,1)+" h":"ohne Vorgabe")+'</span></div>';
+}
+
+/* =====================================================================
+   5. Ansichten
+   ===================================================================== */
+function zeichnen(){
+  const fuehrung = S.ich && S.ich.rolle==="fuehrung";
+  el("nav").hidden = !(S.cfg && S.ich);
+  el("wer").innerHTML = S.ich ? esc(S.ich.name)+' · <button id="abmelden">wechseln</button>' : "";
+  Array.from(document.querySelectorAll("#nav button")).forEach(b=>{
+    b.classList.toggle("aktiv", b.dataset.ansicht===S.ansicht);
+    if(b.dataset.fuehrung) b.hidden = !fuehrung;
+  });
+
+  const c = el("inhalt");
+  if(!S.cfg){ c.innerHTML=viewSetup(); nachher(); return; }
+  if(!S.ich){ c.innerHTML=viewPerson(); nachher(); return; }
+
+  const v = {tag:viewTag, woche:viewWoche, auftraege:viewAuftraege,
+             auswertung:viewAuswertung, verwaltung:viewVerwaltung}[S.ansicht] || viewTag;
+  const wartet = S.queue.length ? '<div class="warnung">'+S.queue.length+' Eintrag/Einträge warten auf Übertragung. Sie gehen nicht verloren.</div>' : "";
+  c.innerHTML = wartet + v();
+  nachher(); window.scrollTo(0,0);
+}
+function nachher(){
+  const ab=el("abmelden");
+  if(ab) ab.onclick=()=>{ S.ich=null; sichern("ich",null); S.form=null; S.aform=null; zeichnen(); };
+  if(S.uhr) uhrTicken();
+}
+
+/* ---------- Einrichtung ---------- */
+function viewSetup(){
+  return '<h2>Verbindung einrichten</h2>'
+  + '<p class="hinweis">Die Zugangsdaten stehen in Supabase unter Project Settings, Bereich API. Sie werden nur auf diesem Gerät gespeichert.</p>'
+  + '<div class="feld"><label for="f_url">Projekt-URL</label>'
+  + '<input id="f_url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://xxxx.supabase.co"></div>'
+  + '<div class="feld"><label for="f_key">anon public key</label>'
+  + '<textarea id="f_key" rows="3" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea></div>'
+  + '<button class="knopf" id="setup_speichern">Verbinden</button>';
+}
+function viewPerson(){
+  if(!S.mitarbeiter.length){
+    return '<h2>Keine Mitarbeiter gefunden</h2>'
+    + '<p class="hinweis">Entweder ist die Datenbank leer oder die Verbindung stimmt nicht. Lege in Supabase mindestens eine Person an, wie am Ende von schema.sql beschrieben.</p>'
+    + '<button class="knopf zweit" id="verbindung_neu">Verbindung ändern</button>';
+  }
+  return '<h2>Wer bucht?</h2>'
+  + S.mitarbeiter.map(m=>'<button class="tat" data-person="'+esc(m.id)+'"><strong>'+esc(m.name)+'</strong>'
+      +'<small>'+(m.rolle==="fuehrung"?"Führung":"Werkstatt")+'</small></button>').join("")
+  + '<div class="trenner"></div><button class="knopf zweit" id="verbindung_neu">Verbindung ändern</button>';
+}
+
+/* ---------- Tagesansicht ---------- */
+function viewTag(){
+  if(S.form) return viewFormular();
+
+  const d = S.tag;
+  const meine = zeitenVon(S.ich.id, d).slice().sort((a,b)=>String(a.erfasst_am||"").localeCompare(String(b.erfasst_am||"")));
+  const zug = summe(meine);
+  const anw = anwesend(S.ich.id, d);
+
+  let h = '<div class="tagnav">'
+    + '<button data-tag="-1" aria-label="Vorheriger Tag">‹</button>'
+    + '<div class="datum">'+wochentag(d)+'<small>'+datumLang(d)+(d===heute()?" · heute":"")+'</small></div>'
+    + '<button data-tag="1" aria-label="Nächster Tag"'+(d>=heute()?' disabled':'')+'>›</button>'
+    + '</div>';
+
+  if(S.uhr){
+    const t=taet(S.uhr.taetigkeit_id), a=auftrag(S.uhr.auftrag_id);
+    h += '<div class="uhr"><small>'+esc(t?t.name:"Zeitmessung")+(a?" · "+esc(a.nummer):"")+'</small>'
+       + '<div class="zeit zahl" id="uhrzeit">00:00:00</div>'
+       + '<button id="uhr_stopp">Messung beenden und buchen</button></div>';
+  }
+
+  // Anwesenheit
+  h += '<div class="feld"><label for="anw">Wie lange warst du da?</label>'
+     + '<div class="stufen">'
+     + '<button data-anw="-0.25" aria-label="Viertelstunde weniger">−</button>'
+     + '<input id="anw" type="text" inputmode="decimal" value="'+(anw!==null?zahl(anw,2):"")+'" placeholder="8,00">'
+     + '<span class="einheit">h</span>'
+     + '<button data-anw="0.25" aria-label="Viertelstunde mehr">+</button>'
+     + '</div></div>';
+
+  // Bilanz
+  if(anw!==null || meine.length){
+    const rest = anw!==null ? anw-zug : null;
+    let zustand="offen", text="";
+    if(rest===null){ text="Anwesenheit noch nicht eingetragen"; zustand="offen"; }
+    else if(Math.abs(rest)<0.01){ text="vollständig"; zustand="voll"; }
+    else if(rest>0){ text=zahl(rest,2)+" h noch nicht zugeordnet"; zustand="offen"; }
+    else { text=zahl(-rest,2)+" h zuviel zugeordnet"; zustand="zuviel"; }
+    h += '<div class="bilanz"><div class="oben"><span>Zugeordnet</span>'
+       + '<span class="zahl">'+zahl(zug,2)+' h'+(anw!==null?' von '+zahl(anw,2)+' h':'')+'</span></div>'
+       + '<div class="rest" data-s="'+zustand+'"><span>Stand</span><span class="zahl">'+esc(text)+'</span></div></div>';
+  }
+
+  // Zeilen
+  if(meine.length){
+    h += '<div class="zeilen">';
+    meine.forEach(z=>{
+      const t=taet(z.taetigkeit_id), a=auftrag(z.auftrag_id);
+      h += '<button class="buchung" data-bearbeiten="'+esc(z.id)+'"'+(z._wartet?' disabled':'')+'>'
+         + '<span class="strich" data-art="'+tatArt(t)+'"></span>'
+         + '<span class="mitte"><strong>'+esc(t?t.name:"—")+'</strong>'
+         + '<small>'+esc(a? a.nummer+" · "+(a.bezeichnung||a.kunde||"") : "ohne Auftrag")
+         + (z.notiz? " · "+esc(z.notiz):"")+(z._wartet?" · wartet auf Übertragung":"")+'</small>'
+         + (z.nachtrag? '<span class="marke">Nachtrag prüfen</span>':'')
+         + '</span><span class="h zahl">'+zahl(z.stunden,2)+' h</span></button>';
+    });
+    h += '</div>';
+  }else{
+    h += '<p class="leer">Für diesen Tag ist noch nichts erfasst.</p>';
+  }
+
+  h += '<button class="knopf" id="neue_zeit">Zeit erfassen</button>';
+  return h;
+}
+
+/* ---------- Erfassungsformular ---------- */
+function viewFormular(){
+  const f = S.form;
+  const waehlbar = S.auftraege.filter(a=>a.status!=="abgeschlossen" || a.id===f.auftrag_id);
+  const andere = S.mitarbeiter.filter(m=>m.id!==S.ich.id);
+
+  let h = '<h2>'+(f.id?"Buchung ändern":"Zeit erfassen")
+        + '<span class="nebenzahl">'+datumKurz(S.tag)+'</span></h2>';
+
+  h += '<div class="feld"><label for="f_auftrag">Auftrag</label>'
+     + '<select id="f_auftrag">'
+     + '<option value="">– ohne Auftrag –</option>'
+     + waehlbar.map(a=>'<option value="'+esc(a.id)+'"'+(a.id===f.auftrag_id?" selected":"")+'>'
+         + esc(a.nummer)+" · "+esc(a.bezeichnung||a.kunde||"")+'</option>').join("")
+     + '</select></div>'
+     + '<button class="knopf zweit klein" id="kleinauftrag" style="margin-bottom:18px">Kleinauftrag anlegen</button>';
+
+  h += '<h2>Was war das?</h2>'
+     + S.taetigkeiten.map(t=>'<button class="tat'+(t.id===f.taetigkeit_id?" aktiv":"")+'" data-taetigkeit="'+esc(t.id)+'" data-art="'+tatArt(t)+'">'
+        + '<strong>'+esc(t.name)+'</strong><small>'+esc(tatBeschreibung(t))+'</small></button>').join("");
+
+  h += '<h2 class="abstand">Wie lange?</h2>'
+     + '<div class="stufen" style="margin-bottom:16px">'
+     + '<button data-std="-0.25" aria-label="Viertelstunde weniger">−</button>'
+     + '<input id="f_stunden" type="text" inputmode="decimal" value="'+zahl(f.stunden,2)+'">'
+     + '<span class="einheit">h</span>'
+     + '<button data-std="0.25" aria-label="Viertelstunde mehr">+</button></div>';
+
+  h += '<div class="feld"><label for="f_notiz">Notiz</label>'
+     + '<input id="f_notiz" type="text" value="'+esc(f.notiz||"")+'" placeholder="z. B. Estrich noch nicht trocken"></div>'
+     + '<div class="feld"><label class="zeileninhalt"><input type="checkbox" id="f_nachtrag"'+(f.nachtrag?" checked":"")+'> Zusatzarbeit – Nachtrag prüfen</label></div>';
+
+  h += '<div class="feld"><label for="f_foto">Foto anhängen</label>'
+     + '<input id="f_foto" type="file" accept="image/*" capture="environment">'
+     + '<div id="f_vorschau">'+(f.foto?'<img class="vorschau" src="'+f.foto+'" alt="Angehängtes Foto">':'')+'</div></div>';
+
+  if(!f.id && andere.length){
+    h += '<div class="feld"><label>Gleiche Zeit auch buchen für</label>'
+       + andere.map(m=>'<label class="zeileninhalt" style="margin-bottom:6px">'
+         + '<input type="checkbox" class="mit" value="'+esc(m.id)+'"> '+esc(m.name)+'</label>').join("")
+       + '</div>';
+  }
+
+  h += '<button class="knopf" id="f_speichern">'+(f.id?"Änderung speichern":"Buchen")+'</button>'
+     + (f.id? '' : '<button class="knopf zweit" id="uhr_start">Stattdessen Zeit mitlaufen lassen</button>')
+     + (f.id? '<button class="knopf gefahr" id="f_loeschen">Buchung löschen</button>' : '')
+     + '<button class="knopf zweit" id="f_abbrechen">Abbrechen</button>';
+  return h;
+}
+
+/* ---------- Woche ---------- */
+function viewWoche(){
+  const tage=[]; for(let i=0;i<7;i++) tage.push(verschieben(heute(),-i));
+  let h='<h2>Letzte sieben Tage</h2>';
+  const alle = tage.flatMap(d=>zeitenVon(S.ich.id,d));
+  const ges = summe(alle);
+  const wert = alle.reduce((s,z)=>{ const t=taet(z.taetigkeit_id); return s+(t&&t.wertschoepfend?Number(z.stunden||0):0); },0);
+  h += '<div class="karte"><div class="kennzahl"><span>Zugeordnete Stunden</span><b class="zahl">'+zahl(ges,2)+' h</b></div>'
+     + '<div class="kennzahl"><span>Davon am Werkstück</span><b class="zahl">'+zahl(wert,2)+' h</b></div></div>';
+
+  tage.forEach(d=>{
+    const z = zeitenVon(S.ich.id,d), anw = anwesend(S.ich.id,d), zug = summe(z);
+    if(!z.length && anw===null) return;
+    const luecke = anw!==null && Math.abs(anw-zug)>=0.25;
+    h += '<button class="buchung" data-gehezu="'+d+'" style="border:1px solid var(--linie);border-radius:6px;background:var(--karte);margin-bottom:8px">'
+       + '<span class="strich" data-art="'+(luecke?"verlust":"wert")+'"></span>'
+       + '<span class="mitte"><strong>'+wochentag(d)+', '+datumKurz(d)+'</strong>'
+       + '<small>'+(anw!==null? zahl(anw,2)+" h anwesend" : "keine Anwesenheit eingetragen")
+       + (luecke? " · "+zahl(anw-zug,2)+" h offen" : "")+'</small></span>'
+       + '<span class="h zahl">'+zahl(zug,2)+' h</span></button>';
+  });
+  if(h.indexOf("data-gehezu")<0) h += '<p class="leer">In den letzten sieben Tagen ist nichts erfasst.</p>';
+  return h;
+}
+
+/* ---------- Aufträge ---------- */
+function viewAuftraege(){
+  if(S.aform) return viewAuftragsformular();
+  const fuehrung = S.ich.rolle==="fuehrung";
+  return fuehrung ? auftraegeFuehrung() : auftraegeWerkstatt();
+}
+
+function auftraegeFuehrung(){
+  const offen = S.auftraege.filter(a=>a.status!=="abgeschlossen");
+  const zu    = S.auftraege.filter(a=>a.status==="abgeschlossen")
+                 .sort((a,b)=>String(b.abgeschlossen_am||"").localeCompare(String(a.abgeschlossen_am||"")));
+  let h="";
+
+  const kritisch = offen.filter(a=>Number(a.kalkulierte_stunden)>0 && istStunden(a.id)/Number(a.kalkulierte_stunden)>=0.8);
+  if(kritisch.length){
+    h += '<div class="warnung"><strong>Achtung:</strong> '
+      + kritisch.map(a=>esc(a.nummer)+" ("+zahl(istStunden(a.id)/Number(a.kalkulierte_stunden)*100,0)+" %)").join(", ")
+      + ' haben 80 % der kalkulierten Stunden erreicht.</div>';
+  }
+
+  h += '<h2>Offene Aufträge</h2>';
+  h += offen.length ? offen.map(a=>
+      '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.kunde||"Auftrag")+'</strong>'
+      + '<span class="nr">'+esc(a.nummer)+'</span></div>'
+      + (a.kunde? '<p class="kunde">'+esc(a.kunde)+(a.art?" · "+esc(a.art):"")+'</p>':"")
+      + skalaHtml(istStunden(a.id), a.kalkulierte_stunden)
+      + '<button class="knopf zweit klein" data-auftrag-bearbeiten="'+esc(a.id)+'" style="margin-top:10px">Bearbeiten oder abschließen</button>'
+      + '</div>').join("") : '<p class="leer">Keine offenen Aufträge.</p>';
+
+  if(zu.length){
+    h += '<h2 class="abstand">Abgeschlossen</h2>'
+      + zu.slice(0,20).map(a=>rueckmeldungHtml(a)).join("");
+  }
+  return h;
+}
+
+function auftraegeWerkstatt(){
+  const meine = S.auftraege.filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)>0);
+  const offen = S.auftraege.filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)===0);
+  let h = '<h2>Woran du arbeitest</h2>';
+  h += meine.length ? meine.map(a=>
+      '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.kunde||"Auftrag")+'</strong>'
+      + '<span class="nr">'+esc(a.nummer)+'</span></div>'
+      + (a.kunde? '<p class="kunde">'+esc(a.kunde)+(a.art?" · "+esc(a.art):"")+'</p>':"")
+      + '<div class="kennzahl" style="border:0;padding:6px 0 0"><span>Deine Stunden</span>'
+      + '<b class="zahl">'+zahl(meineStunden(a.id),2)+' h</b></div></div>').join("")
+    : '<p class="leer">Du hast noch auf keinen Auftrag gebucht.</p>';
+
+  if(offen.length){
+    h += '<h2 class="abstand">Weitere offene Aufträge</h2><div class="karte">'
+      + offen.map(a=>'<div class="kennzahl"><span>'+esc(a.nummer)+' · '+esc(a.bezeichnung||a.kunde||"")+'</span></div>').join("")
+      + '</div>';
+  }
+
+  if(S.einst.rueckmeldung==="1"){
+    const zu = S.auftraege.filter(a=>a.status==="abgeschlossen" && meineStunden(a.id)>0)
+      .sort((a,b)=>String(b.abgeschlossen_am||"").localeCompare(String(a.abgeschlossen_am||"")));
+    if(zu.length){
+      h += '<h2 class="abstand">Was daraus geworden ist</h2>'
+        + '<p class="hinweis">Rückblick auf abgeschlossene Aufträge, an denen du mitgearbeitet hast.</p>'
+        + zu.slice(0,10).map(a=>rueckmeldungHtml(a)).join("");
+    }
+  }
+  return h;
+}
+
+function rueckmeldungHtml(a){
+  const ist = istStunden(a.id), soll = Number(a.kalkulierte_stunden)||0;
+  const proTaet = {};
+  alleZeiten().filter(z=>z.auftrag_id===a.id).forEach(z=>{
+    const t=taet(z.taetigkeit_id), n=t?t.name:"ohne Zuordnung";
+    proTaet[n] = proTaet[n] || {h:0, art: tatArt(t)};
+    proTaet[n].h += Number(z.stunden||0);
+  });
+  let h = '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.kunde||"Auftrag")+'</strong>'
+    + '<span class="nr">'+esc(a.nummer)+(a.abgeschlossen_am? " · "+datumKurz(a.abgeschlossen_am):"")+'</span></div>'
+    + skalaHtml(ist, soll);
+  Object.keys(proTaet).sort((x,y)=>proTaet[y].h-proTaet[x].h).forEach(n=>{
+    const p=proTaet[n], anteil = ist? p.h/ist*100 : 0;
+    h += '<div style="padding:7px 0"><div class="kennzahl" style="border:0;padding:0;font-size:13.5px">'
+      + '<span>'+esc(n)+'</span><b class="zahl">'+zahl(p.h,1)+' h</b></div>'
+      + '<div class="balken"><i class="'+p.art+'" style="width:'+anteil.toFixed(1)+'%"></i></div></div>';
+  });
+  if(a.abschluss_notiz) h += '<p class="hinweis" style="margin:10px 0 0">'+esc(a.abschluss_notiz)+'</p>';
+  return h+'</div>';
+}
+
+/* ---------- Auftragsformular ---------- */
+function viewAuftragsformular(){
+  const f = S.aform;
+  const arten = ["Treppe","Innenausbau","Möbel","Fenster/Türen","Reparatur","Kundendienst","Sonstiges"];
+  let h = '<h2>'+(f.id?"Auftrag bearbeiten":"Neuer Auftrag")+'</h2>';
+  h += '<div class="zeile"><div class="feld"><label for="a_nummer">Nummer</label>'
+     + '<input id="a_nummer" type="text" value="'+esc(f.nummer||"")+'" placeholder="2026-041"></div>'
+     + '<div class="feld"><label for="a_art">Art</label><select id="a_art">'
+     + arten.map(x=>'<option'+(x===f.art?" selected":"")+'>'+x+'</option>').join("")+'</select></div></div>'
+     + '<div class="feld"><label for="a_kunde">Kunde</label><input id="a_kunde" type="text" value="'+esc(f.kunde||"")+'"></div>'
+     + '<div class="feld"><label for="a_bez">Bezeichnung</label><input id="a_bez" type="text" value="'+esc(f.bezeichnung||"")+'" placeholder="Buchentreppe 1. OG"></div>'
+     + '<div class="zeile"><div class="feld"><label for="a_std">Kalkulierte Stunden</label>'
+     + '<input id="a_std" type="text" inputmode="decimal" value="'+(f.kalkulierte_stunden!=null?zahl(f.kalkulierte_stunden,2):"")+'"></div>'
+     + '<div class="feld"><label for="a_summe">Angebotssumme €</label>'
+     + '<input id="a_summe" type="text" inputmode="decimal" value="'+(f.angebotssumme!=null?zahl(f.angebotssumme,2):"")+'"></div></div>'
+     + '<div class="feld"><label for="a_mat">Materialkosten €</label>'
+     + '<input id="a_mat" type="text" inputmode="decimal" value="'+(f.materialkosten!=null?zahl(f.materialkosten,2):"")+'"></div>';
+
+  if(!f.id) h += kalkulationshilfe(f.art || arten[0]);
+
+  if(f.id){
+    const ist=istStunden(f.id), soll=Number(f.kalkulierte_stunden)||0;
+    h += '<div class="karte">'+skalaHtml(ist,soll)+'</div>'
+       + '<div class="feld"><label for="a_notiz">Warum ist es so gelaufen?</label>'
+       + '<textarea id="a_notiz" rows="3" placeholder="z. B. zwei Tage Wartezeit auf den Estrich">'+esc(f.abschluss_notiz||"")+'</textarea></div>';
+  }
+
+  h += '<button class="knopf" id="a_speichern">Speichern</button>';
+  if(f.id && f.status!=="abgeschlossen") h += '<button class="knopf zweit" id="a_abschliessen">Auftrag abschließen</button>';
+  if(f.id && f.status==="abgeschlossen") h += '<button class="knopf zweit" id="a_oeffnen">Wieder öffnen</button>';
+  h += '<button class="knopf zweit" id="a_abbrechen">Abbrechen</button>';
+  return h;
+}
+
+function kalkulationshilfe(art){
+  const fertig = S.auftraege.filter(a=>a.status==="abgeschlossen" && a.art===art && istStunden(a.id)>0);
+  if(fertig.length<2) return '<p class="hinweis">Sobald zwei Aufträge der Art „'+esc(art)+'" abgeschlossen sind, stehen hier Erfahrungswerte.</p>';
+  const istM = fertig.reduce((s,a)=>s+istStunden(a.id),0)/fertig.length;
+  const mitSoll = fertig.filter(a=>Number(a.kalkulierte_stunden)>0);
+  const abwM = mitSoll.length
+    ? mitSoll.reduce((s,a)=>s+(istStunden(a.id)/Number(a.kalkulierte_stunden)-1),0)/mitSoll.length*100 : null;
+  const proTaet={}; let ges=0;
+  fertig.forEach(a=>alleZeiten().filter(z=>z.auftrag_id===a.id).forEach(z=>{
+    const t=taet(z.taetigkeit_id), n=t?t.name:"ohne Zuordnung";
+    proTaet[n]=(proTaet[n]||0)+Number(z.stunden||0); ges+=Number(z.stunden||0);
+  }));
+  const oben = Object.keys(proTaet).sort((x,y)=>proTaet[y]-proTaet[x]).slice(0,4);
+  return '<div class="karte"><h2 style="margin-bottom:8px">Erfahrungswerte „'+esc(art)+'"</h2>'
+    + '<p class="hinweis" style="margin-bottom:8px">Aus '+fertig.length+' abgeschlossenen Aufträgen.</p>'
+    + '<div class="kennzahl"><span>Tatsächliche Stunden im Mittel</span><b class="zahl">'+zahl(istM,1)+' h</b></div>'
+    + (abwM!==null? '<div class="kennzahl"><span>Mittlere Abweichung zur Kalkulation</span>'
+        + '<b class="zahl stand" data-s="'+(abwM>10?"rot":(abwM>0?"gelb":"gruen"))+'">'+(abwM>0?"+":"")+zahl(abwM,0)+' %</b></div>' : "")
+    + oben.map(n=>'<div class="kennzahl"><span>'+esc(n)+'</span><b class="zahl">'
+        + zahl(ges?proTaet[n]/ges*100:0,0)+' %</b></div>').join("")
+    + '</div>';
+}
+
+/* ---------- Auswertung ---------- */
+function viewAuswertung(){
+  const z = alleZeiten();
+  if(!z.length) return '<h2>Auswertung</h2><p class="leer">Noch keine Buchungen vorhanden.</p>';
+
+  const ges = summe(z);
+  let wert=0, verr=0; const proTaet={};
+  z.forEach(x=>{
+    const t=taet(x.taetigkeit_id), st=Number(x.stunden||0);
+    if(t&&t.wertschoepfend) wert+=st;
+    if(t&&t.verrechenbar) verr+=st;
+    const n=t?t.name:"ohne Zuordnung";
+    proTaet[n]=proTaet[n]||{h:0, art:tatArt(t)};
+    proTaet[n].h+=st;
+  });
+
+  let h = '<h2>Wo geht die Zeit hin?</h2>'
+    + '<p class="hinweis">Alle Buchungen des letzten Jahres, gegliedert nach Tätigkeit und Auftrag – nicht nach Personen.</p>'
+    + '<div class="karte">'
+    + '<div class="kennzahl"><span>Zugeordnete Stunden</span><b class="zahl">'+zahl(ges,1)+' h</b></div>'
+    + '<div class="kennzahl"><span>Davon am Werkstück</span><b class="zahl">'+zahl(wert,1)+' h · '+zahl(ges?wert/ges*100:0,0)+' %</b></div>'
+    + '<div class="kennzahl"><span>Davon berechenbar</span><b class="zahl">'+zahl(verr,1)+' h · '+zahl(ges?verr/ges*100:0,0)+' %</b></div>'
+    + '<div class="kennzahl"><span>Weder noch</span><b class="zahl">'+zahl(ges-verr,1)+' h · '+zahl(ges?(ges-verr)/ges*100:0,0)+' %</b></div></div>';
+
+  h += '<h2 class="abstand">Nach Tätigkeit</h2><div class="karte">';
+  Object.keys(proTaet).sort((a,b)=>proTaet[b].h-proTaet[a].h).forEach(n=>{
+    const p=proTaet[n], anteil=ges?p.h/ges*100:0;
+    h += '<div style="padding:9px 0"><div class="kennzahl" style="border:0;padding:0">'
+      + '<span>'+esc(n)+'</span><b class="zahl">'+zahl(p.h,1)+' h · '+zahl(anteil,0)+' %</b></div>'
+      + '<div class="balken"><i class="'+p.art+'" style="width:'+anteil.toFixed(1)+'%"></i></div></div>';
+  });
+  h += '</div>';
+
+  // unvollständige Tage
+  const luecken=[];
+  for(let i=1;i<=14;i++){
+    const d=verschieben(heute(),-i);
+    const wt=new Date(d+"T12:00:00").getDay(); if(wt===0||wt===6) continue;
+    S.mitarbeiter.forEach(m=>{
+      const zug=summe(zeitenVon(m.id,d)), anw=anwesend(m.id,d);
+      if(anw===null && zug===0) return;
+      if(anw===null) luecken.push({d, name:m.name, text:"Anwesenheit fehlt"});
+      else if(anw-zug>=0.25) luecken.push({d, name:m.name, text:zahl(anw-zug,2)+" h nicht zugeordnet"});
+      else if(zug-anw>=0.25) luecken.push({d, name:m.name, text:zahl(zug-anw,2)+" h zuviel"});
+    });
+  }
+  h += '<h2 class="abstand">Unvollständige Tage</h2>';
+  h += luecken.length
+    ? '<div class="karte">'+luecken.slice(0,25).map(l=>'<div class="kennzahl"><span>'+esc(l.name)+' · '+datumKurz(l.d)+'</span><b>'+esc(l.text)+'</b></div>').join("")+'</div>'
+    : '<p class="leer">Die letzten zwei Wochen sind vollständig.</p>';
+
+  // Nachträge
+  const nach = z.filter(x=>x.nachtrag);
+  if(nach.length){
+    const proA={};
+    nach.forEach(x=>{ const a=auftrag(x.auftrag_id); const k=a?a.nummer+" · "+(a.bezeichnung||a.kunde||""):"ohne Auftrag";
+      proA[k]=proA[k]||{h:0,n:0}; proA[k].h+=Number(x.stunden||0); proA[k].n++; });
+    h += '<h2 class="abstand">Nachträge prüfen</h2><div class="karte">'
+      + Object.keys(proA).map(k=>'<div class="kennzahl"><span>'+esc(k)+'</span><b class="zahl">'+zahl(proA[k].h,1)+' h</b></div>').join("")
+      + '</div>';
+  }
+
+  // Soll gegen Ist
+  h += '<h2 class="abstand">Kalkulation gegen Wirklichkeit</h2><div class="karte">';
+  const mitSoll = S.auftraege.filter(a=>Number(a.kalkulierte_stunden)>0);
+  if(!mitSoll.length){ h += '<p class="leer">Für keinen Auftrag sind kalkulierte Stunden hinterlegt.</p>'; }
+  else mitSoll.forEach(a=>{
+    const ist=istStunden(a.id), soll=Number(a.kalkulierte_stunden), abw=ist-soll, st=stand(ist,soll);
+    h += '<div style="padding:10px 0;border-bottom:1px solid var(--linie)">'
+      + '<div class="kennzahl" style="border:0;padding:0"><span>'+esc(a.nummer)+' · '+esc(a.bezeichnung||a.kunde||"")+'</span>'
+      + '<b class="zahl stand" data-s="'+st.s+'">'+(abw>0?"+":"")+zahl(abw,1)+' h</b></div>'
+      + '<div class="skalatext"><span class="zahl">Soll '+zahl(soll,1)+' h</span><span class="zahl">Ist '+zahl(ist,1)+' h</span></div></div>';
+  });
+  h += '</div>';
+
+  // Deckungsbeitrag
+  const mitGeld = S.auftraege.filter(a=>a.angebotssumme!=null && istStunden(a.id)>0);
+  if(mitGeld.length){
+    h += '<h2 class="abstand">Deckungsbeitrag je gebuchter Stunde</h2>'
+      + '<p class="hinweis">Angebotssumme abzüglich Material, geteilt durch die gebuchten Stunden. Der Wert muss über eurem Stundenverrechnungssatz liegen.</p><div class="karte">';
+    mitGeld.slice().sort((a,b)=>{
+      const da=(Number(a.angebotssumme)-Number(a.materialkosten||0))/istStunden(a.id);
+      const db=(Number(b.angebotssumme)-Number(b.materialkosten||0))/istStunden(b.id);
+      return da-db;
+    }).forEach(a=>{
+      const db=(Number(a.angebotssumme)-Number(a.materialkosten||0))/istStunden(a.id);
+      h += '<div class="kennzahl"><span>'+esc(a.nummer)+' · '+esc(a.art||a.bezeichnung||"")+'</span>'
+        + '<b class="zahl">'+zahl(db,2)+' €/h</b></div>';
+    });
+    h += '</div>';
+  }
+
+  // nach Auftragsart
+  const proArt={};
+  S.auftraege.forEach(a=>{
+    const ist=istStunden(a.id); if(!ist) return;
+    const k=a.art||"ohne Angabe";
+    proArt[k]=proArt[k]||{h:0,umsatz:0,material:0,n:0};
+    proArt[k].h+=ist; proArt[k].n++;
+    if(a.angebotssumme!=null){ proArt[k].umsatz+=Number(a.angebotssumme); proArt[k].material+=Number(a.materialkosten||0); }
+  });
+  if(Object.keys(proArt).length){
+    h += '<h2 class="abstand">Nach Auftragsart</h2><div class="karte">'
+      + Object.keys(proArt).sort((a,b)=>proArt[b].h-proArt[a].h).map(k=>{
+          const p=proArt[k], db=p.umsatz? (p.umsatz-p.material)/p.h : null;
+          return '<div class="kennzahl"><span>'+esc(k)+' ('+p.n+')</span><b class="zahl">'
+            + zahl(p.h,1)+' h'+(db!==null? ' · '+zahl(db,0)+' €/h':'')+'</b></div>';
+        }).join("")+'</div>';
+  }
+  return h;
+}
+
+/* ---------- Verwaltung ---------- */
+function viewVerwaltung(){
+  const rueck = S.einst.rueckmeldung==="1";
+  return '<h2>Neuen Auftrag anlegen</h2>'
+  + '<button class="knopf" id="auftrag_neu">Auftrag anlegen</button>'
+
+  + '<h2 class="abstand">Rückmeldung an die Belegschaft</h2>'
+  + '<p class="hinweis">Ist dies eingeschaltet, sehen Mitarbeiter nach Abschluss eines Auftrags, wie viele Stunden gebraucht wurden und wofür. Während der Auftrag läuft, sehen sie weiterhin nur ihre eigenen Stunden.</p>'
+  + '<button class="knopf '+(rueck?'':'zweit')+'" id="rueck_schalter">'+(rueck?"Eingeschaltet":"Ausgeschaltet")+'</button>'
+
+  + '<h2 class="abstand">Neue Person</h2>'
+  + '<div class="feld"><label for="v_name">Name</label><input id="v_name" type="text"></div>'
+  + '<div class="zeile"><div class="feld"><label for="v_rolle">Rolle</label>'
+  + '<select id="v_rolle"><option value="werkstatt">Werkstatt</option><option value="fuehrung">Führung</option></select></div>'
+  + '<div class="feld"><label for="v_pin">PIN (nur Führung)</label><input id="v_pin" type="text" inputmode="numeric" maxlength="6"></div></div>'
+  + '<button class="knopf zweit" id="v_person_speichern">Person anlegen</button>'
+
+  + '<h2 class="abstand">Neue Tätigkeit</h2>'
+  + '<div class="feld"><label for="v_tname">Bezeichnung</label><input id="v_tname" type="text"></div>'
+  + '<div class="feld"><label class="zeileninhalt"><input type="checkbox" id="v_twert" checked> Wertschöpfend</label></div>'
+  + '<div class="feld"><label class="zeileninhalt"><input type="checkbox" id="v_tverr" checked> Dem Kunden berechenbar</label></div>'
+  + '<button class="knopf zweit" id="v_taet_speichern">Tätigkeit anlegen</button>'
+
+  + '<div class="trenner"></div>'
+  + '<button class="knopf zweit" id="csv">Alle Buchungen als CSV herunterladen</button>'
+  + '<button class="knopf zweit" id="neu_laden">Daten neu laden</button>'
+  + '<button class="knopf gefahr" id="verbindung_neu">Verbindung zurücksetzen</button>';
+}
+
+/* =====================================================================
+   6. Ereignisse
+   ===================================================================== */
+document.addEventListener("click", async (ev) => {
+  const t = ev.target;
+  const ist = (id) => t.closest("#"+id);
+
+  const navBtn = t.closest("#nav button");
+  if(navBtn){ S.ansicht=navBtn.dataset.ansicht; S.form=null; S.aform=null; zeichnen(); return; }
+
+  /* --- Einrichtung --- */
+  if(ist("setup_speichern")){
+    const url=el("f_url").value.trim(), key=el("f_key").value.trim();
+    if(!/^https?:\/\/.+/.test(url)) return melden("Bitte die vollständige Projekt-URL eintragen");
+    if(key.length<20) return melden("Der Key sieht unvollständig aus");
+    S.cfg={url,key}; sichern("cfg",S.cfg);
+    await datenHolen();
+    if(!S.online){ S.cfg=null; sichern("cfg",null); return melden("Verbindung fehlgeschlagen – Daten prüfen"); }
+    melden("Verbunden"); zeichnen(); return;
+  }
+  if(ist("verbindung_neu")){
+    if(!confirm("Verbindung zurücksetzen? Nicht übertragene Einträge bleiben erhalten.")) return;
+    S.cfg=null; S.ich=null; sichern("cfg",null); sichern("ich",null); zeichnen(); return;
+  }
+  const pb = t.closest("[data-person]");
+  if(pb){
+    const m = person(pb.dataset.person); if(!m) return;
+    if(m.rolle==="fuehrung" && m.pin){
+      if(prompt("PIN für "+m.name) !== String(m.pin)) return melden("PIN stimmt nicht");
+    }
+    S.ich={id:m.id,name:m.name,rolle:m.rolle}; sichern("ich",S.ich);
+    S.ansicht="tag"; S.tag=heute(); zeichnen(); return;
+  }
+
+  /* --- Tageswechsel --- */
+  const tb = t.closest("[data-tag]");
+  if(tb){ S.tag=verschieben(S.tag, Number(tb.dataset.tag)); zeichnen(); return; }
+  const gz = t.closest("[data-gehezu]");
+  if(gz){ S.tag=gz.dataset.gehezu; S.ansicht="tag"; zeichnen(); return; }
+
+  /* --- Anwesenheit --- */
+  const ab = t.closest("[data-anw]");
+  if(ab){
+    const f=el("anw");
+    const neu = Math.min(24, Math.max(0, viertel((komma(f.value)||0) + Number(ab.dataset.anw))));
+    f.value = zahl(neu,2);
+    await anwesenheitSpeichern(neu);
+    return;
+  }
+
+  /* --- Stundenregler --- */
+  const sb2 = t.closest("[data-std]");
+  if(sb2){
+    const f=el("f_stunden");
+    f.value = zahl(Math.min(24, Math.max(0.25, viertel((komma(f.value)||0) + Number(sb2.dataset.std)))),2);
+    return;
+  }
+
+  /* --- Formular öffnen --- */
+  if(ist("neue_zeit")){
+    S.form={id:null, auftrag_id:"", taetigkeit_id:null, stunden:1, notiz:"", nachtrag:false, foto:null};
+    zeichnen(); return;
+  }
+  const be = t.closest("[data-bearbeiten]");
+  if(be){
+    const z = alleZeiten().find(x=>x.id===be.dataset.bearbeiten); if(!z) return;
+    S.form={id:z.id, auftrag_id:z.auftrag_id||"", taetigkeit_id:z.taetigkeit_id,
+            stunden:Number(z.stunden), notiz:z.notiz||"", nachtrag:!!z.nachtrag, foto:null};
+    zeichnen(); return;
+  }
+  if(ist("f_abbrechen")){ S.form=null; zeichnen(); return; }
+
+  const tt = t.closest("[data-taetigkeit]");
+  if(tt){
+    Array.from(document.querySelectorAll("[data-taetigkeit]")).forEach(x=>x.classList.remove("aktiv"));
+    tt.classList.add("aktiv");
+    if(S.form) S.form.taetigkeit_id = tt.dataset.taetigkeit;
+    return;
+  }
+
+  /* --- Kleinauftrag --- */
+  if(ist("kleinauftrag")){
+    const kunde = prompt("Name des Kunden");
+    if(!kunde || !kunde.trim()) return;
+    const nr = "KD-"+heute().replace(/-/g,"").slice(2)+"-"+String(
+      S.auftraege.filter(a=>String(a.nummer).startsWith("KD-"+heute().replace(/-/g,"").slice(2))).length+1).padStart(2,"0");
+    try{
+      const neu = await sb("auftraege", {method:"POST", prefer:"return=representation", body:{
+        nummer:nr, kunde:kunde.trim(), bezeichnung:"Kleinauftrag", art:"Kundendienst", kalkulierte_stunden:0
+      }});
+      await datenHolen();
+      S.form.auftrag_id = (neu && neu[0] && neu[0].id) || "";
+      melden("Kleinauftrag "+nr+" angelegt"); zeichnen();
+    }catch(e){ melden("Geht nur online: "+e.message); }
+    return;
+  }
+
+  /* --- Uhr --- */
+  if(ist("uhr_start")){
+    if(!S.form || !S.form.taetigkeit_id) return melden("Erst die Tätigkeit auswählen");
+    S.uhr={start:Date.now(), taetigkeit_id:S.form.taetigkeit_id, auftrag_id:el("f_auftrag").value||null};
+    sichern("uhr",S.uhr); S.form=null; S.tag=heute(); zeichnen(); return;
+  }
+  if(ist("uhr_stopp")){
+    const std = viertel((Date.now()-S.uhr.start)/3600000);
+    const u = S.uhr; S.uhr=null; sichern("uhr",null);
+    if(std<0.25){ melden("Unter einer Viertelstunde – nicht gebucht"); zeichnen(); return; }
+    await zeitBuchen([{auftrag_id:u.auftrag_id, taetigkeit_id:u.taetigkeit_id, mitarbeiter_id:S.ich.id,
+      datum:heute(), stunden:std, notiz:null, nachtrag:false, foto:null}]);
+    return;
+  }
+
+  /* --- Buchung speichern --- */
+  if(ist("f_speichern")){
+    const f=S.form;
+    if(!f.taetigkeit_id) return melden("Bitte die Tätigkeit auswählen");
+    const tk = taet(f.taetigkeit_id);
+    const aid = el("f_auftrag").value || null;
+    if(tk && tk.auftrag_noetig && !aid) return melden("Für diese Tätigkeit fehlt der Auftrag");
+    const std = viertel(komma(el("f_stunden").value));
+    if(!(std>0) || std>24) return melden("Stunden zwischen 0,25 und 24 eintragen");
+    const daten = {auftrag_id:aid, taetigkeit_id:f.taetigkeit_id, datum:S.tag, stunden:std,
+      notiz: el("f_notiz").value.trim()||null, nachtrag: el("f_nachtrag").checked, foto: f.foto||null};
+
+    if(f.id){
+      try{
+        await sb("zeiten?id=eq."+encodeURIComponent(f.id), {method:"PATCH", body:daten, prefer:"return=minimal"});
+        await datenHolen(); melden("Geändert");
+      }catch(e){ melden("Änderung geht nur online"); }
+      S.form=null; zeichnen(); return;
+    }
+    const wer = [S.ich.id].concat(Array.from(document.querySelectorAll(".mit:checked")).map(x=>x.value));
+    await zeitBuchen(wer.map(mid=>Object.assign({}, daten, {mitarbeiter_id:mid})));
+    return;
+  }
+  if(ist("f_loeschen")){
+    if(!confirm("Buchung löschen?")) return;
+    try{
+      await sb("zeiten?id=eq."+encodeURIComponent(S.form.id), {method:"DELETE"});
+      await datenHolen(); melden("Gelöscht");
+    }catch(e){ melden("Löschen geht nur online"); }
+    S.form=null; zeichnen(); return;
+  }
+
+  /* --- Auftragsformular --- */
+  if(ist("auftrag_neu")){
+    S.aform={id:null, art:"Treppe"}; S.ansicht="auftraege"; zeichnen(); return;
+  }
+  const ae = t.closest("[data-auftrag-bearbeiten]");
+  if(ae){ S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten)); zeichnen(); return; }
+  if(ist("a_abbrechen")){ S.aform=null; zeichnen(); return; }
+
+  if(ist("a_speichern") || ist("a_abschliessen") || ist("a_oeffnen")){
+    const f=S.aform;
+    const nummer = el("a_nummer").value.trim();
+    if(!nummer) return melden("Die Auftragsnummer fehlt");
+    const daten = {
+      nummer, art: el("a_art").value,
+      kunde: el("a_kunde").value.trim()||null,
+      bezeichnung: el("a_bez").value.trim()||null,
+      kalkulierte_stunden: komma(el("a_std").value)||0,
+      angebotssumme: el("a_summe").value!=="" ? komma(el("a_summe").value) : null,
+      materialkosten: el("a_mat").value!=="" ? komma(el("a_mat").value) : null
+    };
+    if(f.id){
+      daten.abschluss_notiz = el("a_notiz") ? (el("a_notiz").value.trim()||null) : null;
+      if(ist("a_abschliessen")){ daten.status="abgeschlossen"; daten.abgeschlossen_am=heute(); }
+      if(ist("a_oeffnen")){ daten.status="offen"; daten.abgeschlossen_am=null; }
+    }
+    try{
+      if(f.id) await sb("auftraege?id=eq."+encodeURIComponent(f.id), {method:"PATCH", body:daten, prefer:"return=minimal"});
+      else     await sb("auftraege", {method:"POST", body:daten, prefer:"return=minimal"});
+      await datenHolen(); S.aform=null; S.ansicht="auftraege"; melden("Gespeichert"); zeichnen();
+    }catch(e){ melden("Geht nur online: "+e.message); }
+    return;
+  }
+
+  /* --- Verwaltung --- */
+  if(ist("rueck_schalter")){
+    const neu = S.einst.rueckmeldung==="1" ? "0" : "1";
+    try{
+      await sb("einstellungen?on_conflict=schluessel", {method:"POST",
+        body:{schluessel:"rueckmeldung", wert:neu}, prefer:"resolution=merge-duplicates,return=minimal"});
+      S.einst.rueckmeldung=neu; melden(neu==="1"?"Rückmeldung eingeschaltet":"Rückmeldung ausgeschaltet"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  if(ist("v_person_speichern")){
+    const name=el("v_name").value.trim(); if(!name) return melden("Name fehlt");
+    const rolle=el("v_rolle").value, pin=el("v_pin").value.trim();
+    if(rolle==="fuehrung" && pin.length<4) return melden("Für die Führung bitte eine PIN mit mindestens vier Stellen");
+    try{
+      await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:rolle==="fuehrung"?pin:null}, prefer:"return=minimal"});
+      await datenHolen(); melden("Person angelegt"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  if(ist("v_taet_speichern")){
+    const name=el("v_tname").value.trim(); if(!name) return melden("Bezeichnung fehlt");
+    try{
+      await sb("taetigkeiten",{method:"POST", body:{name, wertschoepfend:el("v_twert").checked,
+        verrechenbar:el("v_tverr").checked, auftrag_noetig:true, sortierung:200}, prefer:"return=minimal"});
+      await datenHolen(); melden("Tätigkeit angelegt"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  if(ist("neu_laden")){ await queueSenden(); await datenHolen(); melden(S.online?"Aktualisiert":"Offline"); zeichnen(); return; }
+  if(ist("csv")){ csvExport(); return; }
+});
+
+/* --- Eingabefelder --- */
+document.addEventListener("change", async (ev) => {
+  const t = ev.target;
+  if(t.id==="anw"){
+    const v = viertel(komma(t.value));
+    if(!(v>=0) || v>24){ t.value=""; return melden("Bitte einen Wert zwischen 0 und 24 eintragen"); }
+    t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
+  }
+  if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
+  if(t.id==="f_foto"){
+    const datei = t.files && t.files[0]; if(!datei) return;
+    try{
+      S.form.foto = await bildVerkleinern(datei);
+      el("f_vorschau").innerHTML = '<img class="vorschau" src="'+S.form.foto+'" alt="Angehängtes Foto">';
+    }catch(e){ melden("Bild konnte nicht verarbeitet werden"); }
+    return;
+  }
+});
+
+/* =====================================================================
+   7. Speichervorgänge
+   ===================================================================== */
+async function zeitBuchen(liste){
+  let offline=0;
+  for(const b of liste){
+    b.client_id = uid();
+    const ok = await senden("zeiten", b, "return=minimal,resolution=ignore-duplicates", "zeit");
+    if(!ok) offline++;
+  }
+  if(offline) melden("Offline gespeichert – wird später übertragen");
+  else { await datenHolen(); melden(liste.length>1 ? liste.length+" Buchungen gespeichert" : "Gebucht"); }
+  S.form=null; zeichnen();
+}
+
+async function anwesenheitSpeichern(std){
+  const b = {mitarbeiter_id:S.ich.id, datum:S.tag, stunden:std};
+  const ok = await senden("anwesenheit?on_conflict=mitarbeiter_id,datum", b,
+                          "resolution=merge-duplicates,return=minimal", "anw");
+  if(ok){
+    const r = S.anwesenheit.find(x=>x.mitarbeiter_id===S.ich.id && x.datum===S.tag);
+    if(r) r.stunden=std; else S.anwesenheit.push(Object.assign({},b));
+  }
+  zeichnen();
+}
+
+/* ---------- Bild verkleinern ---------- */
+function bildVerkleinern(datei){
+  return new Promise((ok,fehler)=>{
+    const leser=new FileReader();
+    leser.onerror=()=>fehler(new Error("Lesefehler"));
+    leser.onload=()=>{
+      const bild=new Image();
+      bild.onerror=()=>fehler(new Error("Kein Bild"));
+      bild.onload=()=>{
+        const max=1000;
+        const f=Math.min(1, max/Math.max(bild.width,bild.height));
+        const c=document.createElement("canvas");
+        c.width=Math.round(bild.width*f); c.height=Math.round(bild.height*f);
+        c.getContext("2d").drawImage(bild,0,0,c.width,c.height);
+        ok(c.toDataURL("image/jpeg",0.6));
+      };
+      bild.src=leser.result;
+    };
+    leser.readAsDataURL(datei);
+  });
+}
+
+/* ---------- laufende Uhr ---------- */
+let uhrInterval=null;
+function uhrTicken(){
+  clearInterval(uhrInterval);
+  const anzeigen=()=>{
+    const f=el("uhrzeit"); if(!f||!S.uhr){ clearInterval(uhrInterval); return; }
+    const s=Math.floor((Date.now()-S.uhr.start)/1000);
+    f.textContent = String(Math.floor(s/3600)).padStart(2,"0")+":"
+      + String(Math.floor(s%3600/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");
+  };
+  anzeigen(); uhrInterval=setInterval(anzeigen,1000);
+}
+
+/* ---------- CSV ---------- */
+function csvExport(){
+  const kopf=["Datum","Mitarbeiter","Auftragsnummer","Kunde","Auftragsart","Taetigkeit",
+              "Wertschoepfend","Verrechenbar","Stunden","Nachtrag","Notiz"];
+  const zeilen = alleZeiten().slice().sort((a,b)=>String(a.datum).localeCompare(String(b.datum))).map(z=>{
+    const m=person(z.mitarbeiter_id), a=auftrag(z.auftrag_id), t=taet(z.taetigkeit_id);
+    return [z.datum, m?m.name:"", a?a.nummer:"", a?(a.kunde||""):"", a?(a.art||""):"",
+            t?t.name:"", t?(t.wertschoepfend?"ja":"nein"):"", t?(t.verrechenbar?"ja":"nein"):"",
+            String(z.stunden).replace(".",","), z.nachtrag?"ja":"nein", z.notiz||""];
+  });
+  const csv=[kopf].concat(zeilen).map(r=>r.map(f=>'"'+String(f==null?"":f).replace(/"/g,'""')+'"').join(";")).join("\r\n");
+  const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="stunden_"+heute()+".csv";
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); },1000);
+}
+
+/* =====================================================================
+   8. Start
+   ===================================================================== */
+window.addEventListener("online", async ()=>{ await queueSenden(); await datenHolen(); zeichnen(); });
+window.addEventListener("offline", ()=>{ S.online=false; melden("Offline – Einträge werden zwischengespeichert"); });
+
+(async function start(){
+  if(S.cfg){ await queueSenden(); await datenHolen(); }
+  if(S.ich && S.mitarbeiter.length && !S.mitarbeiter.some(m=>m.id===S.ich.id)){ S.ich=null; sichern("ich",null); }
+  zeichnen();
+  if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  }
+})();
+</script>
+</body>
+</html>
