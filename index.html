@@ -115,6 +115,8 @@ button.tat small{display:block;color:var(--grau);font-size:12.5px;}
 .buchung strong{font-size:15px;font-weight:700;display:block;}
 .buchung small{color:var(--grau);font-size:12.5px;display:block;}
 .buchung .h{font-weight:700;font-size:15.5px;white-space:nowrap;}
+.minilink{background:none;border:0;color:var(--rot);cursor:pointer;font-size:12.5px;
+  padding:3px 0 0;text-decoration:underline;}
 .marke{display:inline-block;font-size:11.5px;font-weight:700;padding:1px 6px;
   border-radius:3px;background:#F6E3B8;color:#7A5800;margin-top:3px;}
 
@@ -151,6 +153,15 @@ button.tat small{display:block;color:var(--grau);font-size:12.5px;}
 .balken i.noetig{background:var(--zollstock);}
 .balken i.verlust{background:var(--rot);}
 
+.konto{display:flex;justify-content:space-between;align-items:center;margin-top:14px;
+  padding:12px 14px;background:var(--karte);border:1px solid var(--linie);border-radius:6px;font-size:14.5px;}
+.konto b{font-size:19px;font-variant-numeric:tabular-nums;}
+.konto b[data-s="plus"]{color:var(--gruen);}
+.konto b[data-s="minus"]{color:var(--rot);}
+.kontogross{text-align:center;font-size:40px;font-weight:700;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;padding:6px 0;}
+.kontogross[data-s="plus"]{color:var(--gruen);}
+.kontogross[data-s="minus"]{color:var(--rot);}
 .uhr{background:var(--holz);color:var(--grund);border-radius:6px;padding:16px;margin-bottom:14px;}
 .uhr .zeit{font-size:38px;font-weight:700;letter-spacing:-.03em;line-height:1;}
 .uhr small{display:block;opacity:.75;font-size:13px;margin-bottom:8px;}
@@ -159,8 +170,11 @@ button.tat small{display:block;color:var(--grau);font-size:12.5px;}
 
 nav{position:sticky;bottom:0;z-index:20;display:flex;background:var(--karte);
   border-top:1px solid var(--linie);padding-bottom:env(safe-area-inset-bottom);}
-nav button{flex:1;padding:11px 3px 10px;background:none;border:0;border-top:3px solid transparent;
-  font-size:11.5px;font-weight:600;color:var(--grau);cursor:pointer;margin-top:-1px;}
+nav button{flex:1;padding:11px 2px 10px;background:none;border:0;border-top:3px solid transparent;
+  font-size:10.5px;font-weight:600;color:var(--grau);cursor:pointer;margin-top:-1px;
+  line-height:1.25;word-break:break-word;position:relative;}
+nav button .punkt{display:inline-block;min-width:16px;height:16px;line-height:16px;
+  border-radius:8px;background:var(--rot);color:#fff;font-size:10px;margin-left:3px;padding:0 4px;}
 nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 
 .meldung{position:fixed;left:50%;transform:translateX(-50%);bottom:76px;z-index:60;
@@ -187,6 +201,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
   <button data-ansicht="tag">Tag</button>
   <button data-ansicht="woche">Woche</button>
   <button data-ansicht="auftraege">Aufträge</button>
+  <button data-ansicht="lager">Lager</button>
   <button data-ansicht="auswertung" data-fuehrung="1">Auswertung</button>
   <button data-ansicht="verwaltung" data-fuehrung="1">Verwaltung</button>
 </nav>
@@ -202,12 +217,15 @@ const S = {
   ich:   laden("ich", null),
   queue: laden("queue", []),
   uhr:   laden("uhr", null),
+  pinOk: laden("pinOk", []),     // Geräte, auf denen die PIN schon bestätigt wurde
+  letzte: laden("letzte", {}),   // zuletzt gewählter Auftrag und Tätigkeit
   cache: laden("cache", {}),
   ansicht: "tag",
   tag: heute(),
   form: null,     // offenes Erfassungsformular
+  lagerFoto: null,
   aform: null,    // offenes Auftragsformular
-  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [],
+  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [],
   einst: {rueckmeldung:"0"},
   online: navigator.onLine
 };
@@ -255,12 +273,17 @@ function tatBeschreibung(t){
 /* =====================================================================
    3. Datenbank
    ===================================================================== */
+// Entfernt Schrägstriche und ein versehentlich mitkopiertes /rest/v1 am Ende
+function basisUrl(url){
+  return String(url||"").trim().replace(/\/+$/,"").replace(/\/rest(\/v1)?$/,"");
+}
+
 async function sb(pfad, opt){
   if(!S.cfg) throw new Error("Keine Verbindung eingerichtet");
   opt = opt || {};
   const kopf = {"apikey":S.cfg.key, "Authorization":"Bearer "+S.cfg.key, "Content-Type":"application/json"};
   if(opt.prefer) kopf["Prefer"] = opt.prefer;
-  const r = await fetch(S.cfg.url.replace(/\/+$/,"")+"/rest/v1/"+pfad, {
+  const r = await fetch(basisUrl(S.cfg.url)+"/rest/v1/"+pfad, {
     method: opt.method||"GET", headers: kopf,
     body: opt.body ? JSON.stringify(opt.body) : undefined
   });
@@ -275,26 +298,27 @@ async function sb(pfad, opt){
 
 async function datenHolen(){
   try{
-    const [a,t,m,z,an,e] = await Promise.all([
+    const [a,t,m,z,an,e,lg] = await Promise.all([
       sb("auftraege?select=*&order=status.asc,nummer.desc"),
       sb("taetigkeiten?select=*&aktiv=is.true&order=sortierung.asc"),
-      sb("mitarbeiter?select=id,name,rolle,pin,aktiv&aktiv=is.true&order=name.asc"),
+      sb("mitarbeiter?select=id,name,rolle,tagessoll,startsaldo,aktiv&aktiv=is.true&order=name.asc"),
       sb("zeiten?select=id,client_id,auftrag_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
-      sb("anwesenheit?select=*&datum=gte."+vorTagen(90)),
-      sb("einstellungen?select=*")
+      sb("anwesenheit?select=*&order=datum.desc&limit=8000"),
+      sb("einstellungen?select=*"),
+      sb("lager?select=*&order=angelegt_am.desc&limit=500")
     ]);
-    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[];
+    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[];
     S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
     if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
-             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst};
+             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager};
     sichern("cache",S.cache);
     S.online=true;
   }catch(err){
     S.online=false;
     const c=S.cache||{};
     S.auftraege=c.auftraege||[]; S.taetigkeiten=c.taetigkeiten||[]; S.mitarbeiter=c.mitarbeiter||[];
-    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"};
+    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[];
     if(S.cfg && S.ich) melden("Offline – letzter bekannter Stand");
   }
 }
@@ -335,9 +359,44 @@ function anwesend(mid, datum){
   return r ? Number(r.stunden) : null;
 }
 function summe(liste){ return liste.reduce((s,z)=>s+Number(z.stunden||0),0); }
+
+// Stundenkonto: für jeden Tag, an dem eine Anwesenheit eingetragen ist,
+// die Differenz zum Tagessoll. Tage ohne Eintrag (Urlaub, krank, Wochenende)
+// zählen weder plus noch minus.
+function anwesenheitsTage(mid){
+  const aus = {};
+  S.anwesenheit.filter(a=>a.mitarbeiter_id===mid).forEach(a=>{ aus[a.datum]=Number(a.stunden); });
+  S.queue.filter(q=>q.typ==="anw" && q.body.mitarbeiter_id===mid)
+         .forEach(q=>{ aus[q.body.datum]=Number(q.body.stunden); });
+  return aus;
+}
+function stundenkonto(mid, bis){
+  const m = person(mid); if(!m) return {saldo:0, tage:0, soll:0, ist:0};
+  const soll = Number(m.tagessoll)||0;
+  const tage = anwesenheitsTage(mid);
+  let ist=0, n=0;
+  Object.keys(tage).forEach(d=>{ if(bis && d>bis) return; ist+=tage[d]; n++; });
+  return {saldo: Number(m.startsaldo||0) + ist - n*soll, tage:n, soll:n*soll, ist:ist};
+}
+function saldoMonat(mid, monat){   // monat = "2026-09"
+  const m = person(mid); if(!m) return null;
+  const soll = Number(m.tagessoll)||0;
+  const tage = anwesenheitsTage(mid);
+  let ist=0, n=0;
+  Object.keys(tage).forEach(d=>{ if(String(d).slice(0,7)!==monat) return; ist+=tage[d]; n++; });
+  return n ? {saldo: ist-n*soll, tage:n, ist:ist} : null;
+}
+function vorzeichen(v){ return (v>0?"+":"")+zahl(v,2); }
 function taet(id){ return S.taetigkeiten.find(t=>t.id===id); }
 function auftrag(id){ return S.auftraege.find(a=>a.id===id); }
 function person(id){ return S.mitarbeiter.find(m=>m.id===id); }
+
+function alleLager(){
+  return S.queue.filter(q=>q.typ==="lager")
+          .map(q=>Object.assign({},q.body,{id:q.body.client_id,_wartet:true}))
+          .concat(S.lager);
+}
+function offeneMeldungen(){ return alleLager().filter(x=>x.status==="offen").length; }
 
 function stand(ist, soll){
   soll=Number(soll)||0;
@@ -375,13 +434,17 @@ function zeichnen(){
   Array.from(document.querySelectorAll("#nav button")).forEach(b=>{
     b.classList.toggle("aktiv", b.dataset.ansicht===S.ansicht);
     if(b.dataset.fuehrung) b.hidden = !fuehrung;
+    if(b.dataset.ansicht==="lager"){
+      const n = offeneMeldungen();
+      b.innerHTML = "Lager" + (n? ' <span class="punkt">'+n+'</span>' : "");
+    }
   });
 
   const c = el("inhalt");
   if(!S.cfg){ c.innerHTML=viewSetup(); nachher(); return; }
   if(!S.ich){ c.innerHTML=viewPerson(); nachher(); return; }
 
-  const v = {tag:viewTag, woche:viewWoche, auftraege:viewAuftraege,
+  const v = {tag:viewTag, woche:viewWoche, auftraege:viewAuftraege, lager:viewLager,
              auswertung:viewAuswertung, verwaltung:viewVerwaltung}[S.ansicht] || viewTag;
   const wartet = S.queue.length ? '<div class="warnung">'+S.queue.length+' Eintrag/Einträge warten auf Übertragung. Sie gehen nicht verloren.</div>' : "";
   c.innerHTML = wartet + v();
@@ -396,7 +459,7 @@ function nachher(){
 /* ---------- Einrichtung ---------- */
 function viewSetup(){
   return '<h2>Verbindung einrichten</h2>'
-  + '<p class="hinweis">Die Zugangsdaten stehen in Supabase unter Project Settings, Bereich API. Sie werden nur auf diesem Gerät gespeichert.</p>'
+  + '<p class="hinweis">Die Zugangsdaten stehen in Supabase unter Project Settings, Bereich API. Bei der URL nur die Adresse bis <em>.supabase.co</em> eintragen, ohne Zusatz dahinter. Nimm den Schlüssel mit der Bezeichnung <em>anon public</em>, nicht den service_role. Die Daten werden nur auf diesem Gerät gespeichert.</p>'
   + '<div class="feld"><label for="f_url">Projekt-URL</label>'
   + '<input id="f_url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="https://xxxx.supabase.co"></div>'
   + '<div class="feld"><label for="f_key">anon public key</label>'
@@ -477,7 +540,11 @@ function viewTag(){
     h += '<p class="leer">Für diesen Tag ist noch nichts erfasst.</p>';
   }
 
-  h += '<button class="knopf" id="neue_zeit">Zeit erfassen</button>';
+  const kto = stundenkonto(S.ich.id);
+  h += '<button class="knopf" id="neue_zeit">Stunden eintragen</button>'
+     + '<div class="konto"><span>Dein Stundenkonto</span>'
+     + '<b class="zahl" data-s="'+(kto.saldo<-0.01?"minus":(kto.saldo>0.01?"plus":"null"))+'">'
+     + vorzeichen(kto.saldo)+' h</b></div>';
   return h;
 }
 
@@ -502,39 +569,72 @@ function viewFormular(){
      + S.taetigkeiten.map(t=>'<button class="tat'+(t.id===f.taetigkeit_id?" aktiv":"")+'" data-taetigkeit="'+esc(t.id)+'" data-art="'+tatArt(t)+'">'
         + '<strong>'+esc(t.name)+'</strong><small>'+esc(tatBeschreibung(t))+'</small></button>').join("");
 
+  const anw = anwesend(S.ich.id, S.tag);
+  const schon = summe(zeitenVon(S.ich.id, S.tag).filter(z=>z.id!==f.id));
+  const rest = anw!==null ? viertel(anw-schon) : null;
+
   h += '<h2 class="abstand">Wie lange?</h2>'
-     + '<div class="stufen" style="margin-bottom:16px">'
+     + '<div class="stufen">'
      + '<button data-std="-0.25" aria-label="Viertelstunde weniger">−</button>'
      + '<input id="f_stunden" type="text" inputmode="decimal" value="'+zahl(f.stunden,2)+'">'
      + '<span class="einheit">h</span>'
-     + '<button data-std="0.25" aria-label="Viertelstunde mehr">+</button></div>';
+     + '<button data-std="0.25" aria-label="Viertelstunde mehr">+</button></div>'
+     + (rest!==null && rest>0
+        ? '<button class="knopf zweit klein" data-rest="'+rest+'" style="margin:8px 0 16px">Rest des Tages: '+zahl(rest,2)+' h</button>'
+        : '<div style="height:16px"></div>');
 
-  h += '<div class="feld"><label for="f_notiz">Notiz</label>'
-     + '<input id="f_notiz" type="text" value="'+esc(f.notiz||"")+'" placeholder="z. B. Estrich noch nicht trocken"></div>'
-     + '<div class="feld"><label class="zeileninhalt"><input type="checkbox" id="f_nachtrag"'+(f.nachtrag?" checked":"")+'> Zusatzarbeit – Nachtrag prüfen</label></div>';
+  h += '<button class="knopf zweit" id="f_mehr" style="margin-bottom:14px">'
+     + (f.mehr?"Weniger anzeigen":"Notiz, Foto und mehr")+'</button>';
 
-  h += '<div class="feld"><label for="f_foto">Foto anhängen</label>'
-     + '<input id="f_foto" type="file" accept="image/*" capture="environment">'
-     + '<div id="f_vorschau">'+(f.foto?'<img class="vorschau" src="'+f.foto+'" alt="Angehängtes Foto">':'')+'</div></div>';
-
-  if(!f.id && andere.length){
-    h += '<div class="feld"><label>Gleiche Zeit auch buchen für</label>'
-       + andere.map(m=>'<label class="zeileninhalt" style="margin-bottom:6px">'
-         + '<input type="checkbox" class="mit" value="'+esc(m.id)+'"> '+esc(m.name)+'</label>').join("")
-       + '</div>';
+  if(f.mehr){
+    h += '<div class="feld"><label for="f_notiz">Notiz</label>'
+       + '<input id="f_notiz" type="text" value="'+esc(f.notiz||"")+'" placeholder="z. B. Estrich noch nicht trocken"></div>'
+       + '<div class="feld"><label class="zeileninhalt"><input type="checkbox" id="f_nachtrag"'+(f.nachtrag?" checked":"")+'> Zusatzarbeit – Nachtrag prüfen</label></div>'
+       + '<div class="feld"><label for="f_foto">Foto anhängen</label>'
+       + '<input id="f_foto" type="file" accept="image/*" capture="environment">'
+       + '<div id="f_vorschau">'+(f.foto?'<img class="vorschau" src="'+f.foto+'" alt="Angehängtes Foto">':'')+'</div></div>';
+    if(!f.id && andere.length){
+      h += '<div class="feld"><label>Gleiche Zeit auch buchen für</label>'
+         + andere.map(m=>'<label class="zeileninhalt" style="margin-bottom:6px">'
+           + '<input type="checkbox" class="mit" value="'+esc(m.id)+'"'+(f.mit&&f.mit.indexOf(m.id)>=0?" checked":"")+'> '+esc(m.name)+'</label>').join("")
+         + '</div>';
+    }
+    if(!f.id) h += '<button class="knopf zweit" id="uhr_start" style="margin-bottom:14px">Stattdessen Zeit mitlaufen lassen</button>';
   }
 
-  h += '<button class="knopf" id="f_speichern">'+(f.id?"Änderung speichern":"Buchen")+'</button>'
-     + (f.id? '' : '<button class="knopf zweit" id="uhr_start">Stattdessen Zeit mitlaufen lassen</button>')
-     + (f.id? '<button class="knopf gefahr" id="f_loeschen">Buchung löschen</button>' : '')
-     + '<button class="knopf zweit" id="f_abbrechen">Abbrechen</button>';
+  h += '<button class="knopf" id="f_speichern">'+(f.id?"Änderung speichern":"Eintragen")+'</button>'
+     + (f.id? '<button class="knopf gefahr" id="f_loeschen">Eintrag löschen</button>' : '')
+     + '<button class="knopf zweit" id="f_abbrechen">Abbrechen und zurück zum Hauptmenü</button>';
   return h;
 }
 
 /* ---------- Woche ---------- */
 function viewWoche(){
   const tage=[]; for(let i=0;i<7;i++) tage.push(verschieben(heute(),-i));
-  let h='<h2>Letzte sieben Tage</h2>';
+  const kto = stundenkonto(S.ich.id);
+  const m = person(S.ich.id) || {tagessoll:8};
+  let h = '<h2>Dein Stundenkonto</h2>'
+    + '<div class="karte"><div class="kontogross" data-s="'+(kto.saldo<-0.01?"minus":(kto.saldo>0.01?"plus":"null"))+'">'
+    + vorzeichen(kto.saldo)+' h</div>'
+    + '<p class="hinweis" style="margin:6px 0 0;text-align:center">aus '+kto.tage+' erfassten Tagen · '
+    + zahl(m.tagessoll,2)+' h Soll je Tag</p></div>';
+
+  const monate=[];
+  for(let i=0;i<3;i++){
+    const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
+    monate.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));
+  }
+  const zeilen = monate.map(mo=>({mo, r:saldoMonat(S.ich.id, mo)})).filter(x=>x.r);
+  if(zeilen.length){
+    h += '<div class="karte">' + zeilen.map(x=>{
+      const nm=["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"][Number(x.mo.slice(5,7))-1];
+      return '<div class="kennzahl"><span>'+nm+' ('+x.r.tage+' Tage)</span>'
+        + '<b class="zahl stand" data-s="'+(x.r.saldo<-0.01?"rot":(x.r.saldo>0.01?"gruen":"grau"))+'">'+vorzeichen(x.r.saldo)+' h</b></div>';
+    }).join("") + '</div>';
+  }
+  h += '<p class="hinweis">Gezählt werden nur Tage, an denen du eine Anwesenheit eingetragen hast. Urlaub, Krankheit und Wochenenden zählen weder plus noch minus.</p>';
+
+  h+='<h2 class="abstand">Letzte sieben Tage</h2>';
   const alle = tage.flatMap(d=>zeitenVon(S.ich.id,d));
   const ges = summe(alle);
   const wert = alle.reduce((s,z)=>{ const t=taet(z.taetigkeit_id); return s+(t&&t.wertschoepfend?Number(z.stunden||0):0); },0);
@@ -700,6 +800,50 @@ function kalkulationshilfe(art){
     + '</div>';
 }
 
+/* ---------- Lager: was fehlt ---------- */
+function viewLager(){
+  const fuehrung = S.ich.rolle==="fuehrung";
+  const alle = alleLager();
+  const offen     = alle.filter(x=>x.status==="offen");
+  const bestellt  = alle.filter(x=>x.status==="bestellt");
+  const erledigt  = alle.filter(x=>x.status==="erledigt").slice(0,8);
+
+  let h = '<h2>Was fehlt im Lager?</h2>'
+    + '<div class="feld"><input id="l_text" type="text" placeholder="z. B. 5x80 Edelstahl" maxlength="200"></div>'
+    + '<div class="feld"><input id="l_foto" type="file" accept="image/*" capture="environment">'
+    + '<div id="l_vorschau">'+(S.lagerFoto?'<img class="vorschau" src="'+S.lagerFoto+'" alt="Foto">':'')+'</div></div>'
+    + '<button class="knopf" id="l_speichern">Eintragen</button>';
+
+  function zeile(x){
+    const m = person(x.mitarbeiter_id);
+    const wann = x.angelegt_am ? datumKurz(String(x.angelegt_am).slice(0,10)) : "";
+    let knoepfe = "";
+    if(fuehrung && x.status==="offen")    knoepfe = '<button class="knopf zweit klein" data-lager-status="bestellt" data-lager-id="'+esc(x.id)+'">bestellt</button>';
+    if(fuehrung && x.status==="bestellt") knoepfe = '<button class="knopf zweit klein" data-lager-status="erledigt" data-lager-id="'+esc(x.id)+'">da</button>';
+    const loeschbar = !x._wartet && (fuehrung || (x.mitarbeiter_id===S.ich.id && x.status==="offen"));
+    return '<div class="buchung" style="cursor:default">'
+      + '<span class="strich" data-art="'+(x.status==="offen"?"verlust":(x.status==="bestellt"?"noetig":"wert"))+'"></span>'
+      + '<span class="mitte"><strong>'+esc(x.text)+'</strong>'
+      + '<small>'+esc(m?m.name:"—")+(wann? " · "+wann:"")+(x._wartet? " · wartet auf Übertragung":"")+'</small>'
+      + (x.foto? '<img class="vorschau" style="max-height:110px;margin-top:6px" src="'+x.foto+'" alt="Foto">':"")
+      + (loeschbar? '<button class="minilink" data-lager-loeschen="'+esc(x.id)+'">löschen</button>':"")
+      + '</span>'+knoepfe+'</div>';
+  }
+
+  h += '<h2 class="abstand">Offen'+(offen.length? ' <span class="nebenzahl">'+offen.length+'</span>':'')+'</h2>';
+  h += offen.length ? '<div class="zeilen">'+offen.map(zeile).join("")+'</div>'
+                    : '<p class="leer">Nichts offen. Gut so.</p>';
+
+  if(bestellt.length){
+    h += '<h2 class="abstand">Bestellt</h2><div class="zeilen">'+bestellt.map(zeile).join("")+'</div>';
+  }
+  if(erledigt.length){
+    h += '<h2 class="abstand">Erledigt</h2><div class="zeilen">'+erledigt.map(zeile).join("")+'</div>';
+  }
+  if(!fuehrung) h += '<p class="hinweis">Sobald bestellt ist, wandert der Eintrag nach unten. Du siehst also, dass es angekommen ist.</p>';
+  return h;
+}
+
 /* ---------- Auswertung ---------- */
 function viewAuswertung(){
   const z = alleZeiten();
@@ -822,11 +966,29 @@ function viewVerwaltung(){
   + '<p class="hinweis">Ist dies eingeschaltet, sehen Mitarbeiter nach Abschluss eines Auftrags, wie viele Stunden gebraucht wurden und wofür. Während der Auftrag läuft, sehen sie weiterhin nur ihre eigenen Stunden.</p>'
   + '<button class="knopf '+(rueck?'':'zweit')+'" id="rueck_schalter">'+(rueck?"Eingeschaltet":"Ausgeschaltet")+'</button>'
 
+  + '<h2 class="abstand">Stundenkonten</h2>'
+  + '<p class="hinweis">Anwesenheit gegen Tagessoll. Dient der Lohnabrechnung, nicht dem Leistungsvergleich.</p>'
+  + '<div class="karte">'
+  + S.mitarbeiter.map(m=>{
+      const k=stundenkonto(m.id);
+      return '<div class="kennzahl"><span>'+esc(m.name)+' ('+k.tage+' Tage)</span>'
+        + '<b class="zahl stand" data-s="'+(k.saldo<-0.01?"rot":(k.saldo>0.01?"gruen":"grau"))+'">'+vorzeichen(k.saldo)+' h</b></div>';
+    }).join("")
+  + '</div>'
+  + '<div class="feld"><label for="k_person">Tagessoll und Startsaldo ändern</label>'
+  + '<select id="k_person">'+S.mitarbeiter.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.name)+'</option>').join("")+'</select></div>'
+  + '<div class="zeile"><div class="feld"><label for="k_soll">Tagessoll h</label>'
+  + '<input id="k_soll" type="text" inputmode="decimal" placeholder="8,00"></div>'
+  + '<div class="feld"><label for="k_start">Startsaldo h</label>'
+  + '<input id="k_start" type="text" inputmode="decimal" placeholder="0,00"></div></div>'
+  + '<button class="knopf zweit" id="k_speichern">Stundenkonto anpassen</button>'
+
   + '<h2 class="abstand">Neue Person</h2>'
   + '<div class="feld"><label for="v_name">Name</label><input id="v_name" type="text"></div>'
   + '<div class="zeile"><div class="feld"><label for="v_rolle">Rolle</label>'
   + '<select id="v_rolle"><option value="werkstatt">Werkstatt</option><option value="fuehrung">Führung</option></select></div>'
   + '<div class="feld"><label for="v_pin">PIN (nur Führung)</label><input id="v_pin" type="text" inputmode="numeric" maxlength="6"></div></div>'
+  + '<div class="feld"><label for="v_soll">Tagessoll in Stunden</label><input id="v_soll" type="text" inputmode="decimal" placeholder="8,00"></div>'
   + '<button class="knopf zweit" id="v_person_speichern">Person anlegen</button>'
 
   + '<h2 class="abstand">Neue Tätigkeit</h2>'
@@ -838,6 +1000,7 @@ function viewVerwaltung(){
   + '<div class="trenner"></div>'
   + '<button class="knopf zweit" id="csv">Alle Buchungen als CSV herunterladen</button>'
   + '<button class="knopf zweit" id="neu_laden">Daten neu laden</button>'
+  + (S.pinOk.length ? '<button class="knopf zweit" id="pin_vergessen">PIN auf diesem Gerät wieder abfragen</button>' : '')
   + '<button class="knopf gefahr" id="verbindung_neu">Verbindung zurücksetzen</button>';
 }
 
@@ -853,9 +1016,10 @@ document.addEventListener("click", async (ev) => {
 
   /* --- Einrichtung --- */
   if(ist("setup_speichern")){
-    const url=el("f_url").value.trim(), key=el("f_key").value.trim();
+    const url=basisUrl(el("f_url").value), key=el("f_key").value.trim();
     if(!/^https?:\/\/.+/.test(url)) return melden("Bitte die vollständige Projekt-URL eintragen");
     if(key.length<20) return melden("Der Key sieht unvollständig aus");
+    if(/^ey/.test(url) || key.indexOf("supabase.co")>=0) return melden("URL und Key sind vertauscht");
     S.cfg={url,key}; sichern("cfg",S.cfg);
     await datenHolen();
     if(!S.online){ S.cfg=null; sichern("cfg",null); return melden("Verbindung fehlgeschlagen – Daten prüfen"); }
@@ -868,8 +1032,16 @@ document.addEventListener("click", async (ev) => {
   const pb = t.closest("[data-person]");
   if(pb){
     const m = person(pb.dataset.person); if(!m) return;
-    if(m.rolle==="fuehrung" && m.pin){
-      if(prompt("PIN für "+m.name) !== String(m.pin)) return melden("PIN stimmt nicht");
+    if(m.rolle==="fuehrung" && !S.pinOk.includes(m.id)){
+      const eingabe = prompt("PIN für "+m.name);
+      if(eingabe===null) return;
+      let treffer=null;
+      try{
+        treffer = await sb("mitarbeiter?select=id&id=eq."+encodeURIComponent(m.id)
+                          +"&pin=eq."+encodeURIComponent(eingabe.trim()));
+      }catch(e){ return melden("PIN-Prüfung geht nur online"); }
+      if(!treffer || !treffer.length) return melden("PIN stimmt nicht");
+      S.pinOk.push(m.id); sichern("pinOk", S.pinOk);
     }
     S.ich={id:m.id,name:m.name,rolle:m.rolle}; sichern("ich",S.ich);
     S.ansicht="tag"; S.tag=heute(); zeichnen(); return;
@@ -901,14 +1073,27 @@ document.addEventListener("click", async (ev) => {
 
   /* --- Formular öffnen --- */
   if(ist("neue_zeit")){
-    S.form={id:null, auftrag_id:"", taetigkeit_id:null, stunden:1, notiz:"", nachtrag:false, foto:null};
+    const anw = anwesend(S.ich.id, S.tag);
+    const schon = summe(zeitenVon(S.ich.id, S.tag));
+    const rest = anw!==null ? viertel(anw-schon) : 0;
+    S.form={id:null, auftrag_id:S.letzte.auftrag_id||"", taetigkeit_id:S.letzte.taetigkeit_id||null,
+            stunden: rest>0 ? rest : 1, notiz:"", nachtrag:false, foto:null, mehr:false, mit:[]};
+    zeichnen(); return;
+  }
+  const rb = t.closest("[data-rest]");
+  if(rb){ el("f_stunden").value = zahl(Number(rb.dataset.rest),2); return; }
+  if(ist("f_mehr")){
+    S.form.stunden = viertel(komma(el("f_stunden").value))||S.form.stunden;
+    S.form.auftrag_id = el("f_auftrag").value;
+    S.form.mehr = !S.form.mehr;
     zeichnen(); return;
   }
   const be = t.closest("[data-bearbeiten]");
   if(be){
     const z = alleZeiten().find(x=>x.id===be.dataset.bearbeiten); if(!z) return;
     S.form={id:z.id, auftrag_id:z.auftrag_id||"", taetigkeit_id:z.taetigkeit_id,
-            stunden:Number(z.stunden), notiz:z.notiz||"", nachtrag:!!z.nachtrag, foto:null};
+            stunden:Number(z.stunden), notiz:z.notiz||"", nachtrag:!!z.nachtrag, foto:null,
+            mehr: !!(z.notiz || z.nachtrag), mit:[]};
     zeichnen(); return;
   }
   if(ist("f_abbrechen")){ S.form=null; zeichnen(); return; }
@@ -941,7 +1126,8 @@ document.addEventListener("click", async (ev) => {
   /* --- Uhr --- */
   if(ist("uhr_start")){
     if(!S.form || !S.form.taetigkeit_id) return melden("Erst die Tätigkeit auswählen");
-    S.uhr={start:Date.now(), taetigkeit_id:S.form.taetigkeit_id, auftrag_id:el("f_auftrag").value||null};
+    S.uhr={start:Date.now(), taetigkeit_id:S.form.taetigkeit_id,
+           auftrag_id:(el("f_auftrag")? el("f_auftrag").value : "")||null};
     sichern("uhr",S.uhr); S.form=null; S.tag=heute(); zeichnen(); return;
   }
   if(ist("uhr_stopp")){
@@ -963,7 +1149,10 @@ document.addEventListener("click", async (ev) => {
     const std = viertel(komma(el("f_stunden").value));
     if(!(std>0) || std>24) return melden("Stunden zwischen 0,25 und 24 eintragen");
     const daten = {auftrag_id:aid, taetigkeit_id:f.taetigkeit_id, datum:S.tag, stunden:std,
-      notiz: el("f_notiz").value.trim()||null, nachtrag: el("f_nachtrag").checked, foto: f.foto||null};
+      notiz: el("f_notiz") ? (el("f_notiz").value.trim()||null) : (f.notiz||null),
+      nachtrag: el("f_nachtrag") ? el("f_nachtrag").checked : !!f.nachtrag,
+      foto: f.foto||null};
+    S.letzte = {auftrag_id:aid||"", taetigkeit_id:f.taetigkeit_id}; sichern("letzte", S.letzte);
 
     if(f.id){
       try{
@@ -1033,7 +1222,8 @@ document.addEventListener("click", async (ev) => {
     const rolle=el("v_rolle").value, pin=el("v_pin").value.trim();
     if(rolle==="fuehrung" && pin.length<4) return melden("Für die Führung bitte eine PIN mit mindestens vier Stellen");
     try{
-      await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:rolle==="fuehrung"?pin:null}, prefer:"return=minimal"});
+      await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:rolle==="fuehrung"?pin:null,
+        tagessoll: komma(el("v_soll").value)||8, startsaldo:0}, prefer:"return=minimal"});
       await datenHolen(); melden("Person angelegt"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
     return;
@@ -1047,6 +1237,51 @@ document.addEventListener("click", async (ev) => {
     }catch(e){ melden("Geht nur online"); }
     return;
   }
+  if(ist("k_speichern")){
+    const mid = el("k_person").value;
+    const daten = {};
+    if(el("k_soll").value.trim()!=="")  daten.tagessoll  = komma(el("k_soll").value);
+    if(el("k_start").value.trim()!=="") daten.startsaldo = komma(el("k_start").value);
+    if(!Object.keys(daten).length) return melden("Nichts einzutragen");
+    if(daten.tagessoll!==undefined && !(daten.tagessoll>0 && daten.tagessoll<=24)) return melden("Tagessoll zwischen 0 und 24");
+    try{
+      await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:daten, prefer:"return=minimal"});
+      await datenHolen(); melden("Stundenkonto angepasst"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  if(ist("pin_vergessen")){ S.pinOk=[]; sichern("pinOk",[]); melden("PIN wird wieder abgefragt"); zeichnen(); return; }
+  /* --- Lager --- */
+  if(ist("l_speichern")){
+    const txt = el("l_text").value.trim();
+    if(!txt) return melden("Bitte eintragen, was fehlt");
+    const b = {client_id:uid(), text:txt, foto:S.lagerFoto||null,
+               mitarbeiter_id:S.ich.id, status:"offen", angelegt_am:new Date().toISOString()};
+    const ok = await senden("lager", b, "return=minimal,resolution=ignore-duplicates", "lager");
+    S.lagerFoto=null;
+    if(ok){ await datenHolen(); melden("Eingetragen"); }
+    else melden("Offline gespeichert – wird später übertragen");
+    zeichnen(); return;
+  }
+  const ls = t.closest("[data-lager-status]");
+  if(ls){
+    try{
+      await sb("lager?id=eq."+encodeURIComponent(ls.dataset.lagerId), {method:"PATCH",
+        body:{status:ls.dataset.lagerStatus, geaendert_am:new Date().toISOString()}, prefer:"return=minimal"});
+      await datenHolen(); melden(ls.dataset.lagerStatus==="bestellt"?"Als bestellt vermerkt":"Erledigt"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  const ll = t.closest("[data-lager-loeschen]");
+  if(ll){
+    if(!confirm("Eintrag löschen?")) return;
+    try{
+      await sb("lager?id=eq."+encodeURIComponent(ll.dataset.lagerLoeschen), {method:"DELETE"});
+      await datenHolen(); melden("Gelöscht"); zeichnen();
+    }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
+
   if(ist("neu_laden")){ await queueSenden(); await datenHolen(); melden(S.online?"Aktualisiert":"Offline"); zeichnen(); return; }
   if(ist("csv")){ csvExport(); return; }
 });
@@ -1060,6 +1295,14 @@ document.addEventListener("change", async (ev) => {
     t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
   }
   if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
+  if(t.id==="l_foto"){
+    const datei = t.files && t.files[0]; if(!datei) return;
+    try{
+      S.lagerFoto = await bildVerkleinern(datei);
+      el("l_vorschau").innerHTML = '<img class="vorschau" src="'+S.lagerFoto+'" alt="Foto">';
+    }catch(e){ melden("Bild konnte nicht verarbeitet werden"); }
+    return;
+  }
   if(t.id==="f_foto"){
     const datei = t.files && t.files[0]; if(!datei) return;
     try{
