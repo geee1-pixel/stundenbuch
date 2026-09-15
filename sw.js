@@ -1,6 +1,6 @@
 // Service Worker: macht die App offline verfügbar.
 // Bei jeder Änderung an index.html die Versionsnummer erhöhen.
-const VERSION = "stundenbuch-v6";
+const VERSION = "stundenbuch-v8";
 const DATEIEN = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {

@@ -148,6 +148,8 @@ button.tat small{display:block;color:var(--grau);font-size:12.5px;}
 .auftragkopf .nr{font-size:12.5px;color:var(--grau);white-space:nowrap;}
 .kunde{font-size:13.5px;color:var(--grau);margin:2px 0 0;}
 
+.kundenkopf{margin:22px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--grau);border-bottom:1px solid var(--linie);padding-bottom:5px;}
 .kennzahl{display:flex;justify-content:space-between;gap:12px;padding:9px 0;
   border-bottom:1px solid var(--linie);font-size:14.5px;}
 .kennzahl:last-child{border-bottom:0;}
@@ -221,7 +223,7 @@ const S = {
   ich:   laden("ich", null),
   queue: laden("queue", []),
   uhr:   laden("uhr", null),
-  pinOk: laden("pinOk", []),     // Geräte, auf denen die PIN schon bestätigt wurde
+  pinMerk: laden("pinMerk", {}), // Prüfsummen für die Anmeldung ohne Netz
   letzte: laden("letzte", {}),   // zuletzt gewählter Auftrag und Tätigkeit
   cache: laden("cache", {}),
   ansicht: "tag",
@@ -230,7 +232,7 @@ const S = {
   lagerFoto: null,
   wform: null,
   aform: null,    // offenes Auftragsformular
-  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [],
+  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [],
   reiter: "lager",
   einst: {rueckmeldung:"0"},
   online: navigator.onLine
@@ -253,6 +255,17 @@ function datumKurz(iso){ const t=String(iso).split("-"); return t[2]+"."+t[1]+".
 function datumLang(iso){ const t=String(iso).split("-"); return t[2]+"."+t[1]+"."+t[0]; }
 function wochentag(iso){ return ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][new Date(iso+"T12:00:00").getDay()]; }
 function uid(){ return "c"+Date.now().toString(36)+Math.random().toString(36).slice(2,9); }
+
+// Prüfsumme der PIN, damit die Anmeldung auch ohne Netz funktioniert,
+// ohne dass die PIN selbst auf dem Gerät liegt.
+async function pruefsumme(id, pin){
+  try{
+    if(!(window.crypto && window.crypto.subtle)) return null;
+    const roh = new TextEncoder().encode(id+":"+pin);
+    const buf = await window.crypto.subtle.digest("SHA-256", roh);
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }catch(e){ return null; }
+}
 function komma(v){ return Number(String(v==null?"":v).replace(",", ".")); }
 function viertel(v){ return Math.round(Number(v)*4)/4; }
 
@@ -304,29 +317,30 @@ async function sb(pfad, opt){
 
 async function datenHolen(){
   try{
-    const [a,t,m,z,an,e,lg,wu] = await Promise.all([
+    const [a,t,m,z,an,e,lg,wu,po] = await Promise.all([
       sb("auftraege?select=*&order=status.asc,nummer.desc"),
       sb("taetigkeiten?select=*&order=sortierung.asc"),
       sb("mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,aktiv&aktiv=is.true&order=name.asc"),
-      sb("zeiten?select=id,client_id,auftrag_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
+      sb("zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
       sb("anwesenheit?select=*&order=datum.desc&limit=8000"),
       sb("einstellungen?select=*"),
       sb("lager?select=*&order=angelegt_am.desc&limit=500"),
-      sb("wuensche?select=*&order=angelegt_am.desc&limit=300")
+      sb("wuensche?select=*&order=angelegt_am.desc&limit=300"),
+      sb("positionen?select=*&order=sortierung.asc&limit=2000")
     ]);
-    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[];
+    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[]; S.positionen=po||[];
     S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
     if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
     if(S.einst.stundensatz===undefined) S.einst.stundensatz="60";
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
-             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche};
+             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen};
     sichern("cache",S.cache);
     S.online=true;
   }catch(err){
     S.online=false;
     const c=S.cache||{};
     S.auftraege=c.auftraege||[]; S.taetigkeiten=c.taetigkeiten||[]; S.mitarbeiter=c.mitarbeiter||[];
-    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[];
+    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[]; S.positionen=c.positionen||[];
     if(S.cfg && S.ich) melden("Offline – letzter bekannter Stand");
   }
 }
@@ -402,6 +416,15 @@ function vorzeichen(v){ return (v>0?"+":"")+zahl(v,2); }
 function taet(id){ return S.taetigkeiten.find(t=>t.id===id); }
 function aktiveTaet(){ return S.taetigkeiten.filter(t=>t.aktiv!==false); }
 function auftrag(id){ return S.auftraege.find(a=>a.id===id); }
+function posten(aid){ return S.positionen.filter(p=>p.auftrag_id===aid); }
+function pos(id){ return S.positionen.find(p=>p.id===id); }
+function istStundenPos(pid){ return alleZeiten().reduce((s,z)=> z.position_id===pid ? s+Number(z.stunden||0) : s, 0); }
+// Soll eines Auftrags: Summe der Posten, sonst der Wert am Auftrag selbst
+function sollVon(a){
+  const ps = posten(a.id);
+  if(ps.length) return ps.reduce((s,p)=>s+Number(p.kalkulierte_stunden||0),0);
+  return Number(a.kalkulierte_stunden)||0;
+}
 function person(id){ return S.mitarbeiter.find(m=>m.id===id); }
 
 function alleLager(){
@@ -464,7 +487,7 @@ function skalaHtml(ist, soll){
 function zeichnen(){
   const fuehrung = S.ich && S.ich.rolle==="fuehrung";
   el("nav").hidden = !(S.cfg && S.ich);
-  el("wer").innerHTML = S.ich ? esc(S.ich.name)+' · <button id="abmelden">wechseln</button>' : "";
+  el("wer").innerHTML = S.ich ? esc(S.ich.name)+' · <button id="abmelden">abmelden</button>' : "";
   Array.from(document.querySelectorAll("#nav button")).forEach(b=>{
     b.classList.toggle("aktiv", b.dataset.ansicht===S.ansicht);
     if(b.dataset.fuehrung) b.hidden = !fuehrung;
@@ -506,7 +529,8 @@ function viewPerson(){
     + '<p class="hinweis">Entweder ist die Datenbank leer oder die Verbindung stimmt nicht. Lege in Supabase mindestens eine Person an, wie am Ende von schema.sql beschrieben.</p>'
     + '<button class="knopf zweit" id="verbindung_neu">Verbindung ändern</button>';
   }
-  return '<h2>Wer bucht?</h2>'
+  return '<h2>Anmelden</h2>'
+  + '<p class="hinweis">Jeder meldet sich mit seiner eigenen PIN an und bleibt danach angemeldet. Für Kollegen buchst du über die Sammelbuchung im Erfassungsformular mit.</p>'
   + S.mitarbeiter.map(m=>'<button class="tat" data-person="'+esc(m.id)+'"><strong>'+esc(m.name)+'</strong>'
       +'<small>'+(m.rolle==="fuehrung"?"Führung":"Werkstatt")+'</small></button>').join("")
   + '<div class="trenner"></div><button class="knopf zweit" id="verbindung_neu">Verbindung ändern</button>';
@@ -564,7 +588,7 @@ function viewTag(){
       h += '<button class="buchung" data-bearbeiten="'+esc(z.id)+'"'+(z._wartet?' disabled':'')+'>'
          + '<span class="strich" data-art="'+tatArt(t)+'"></span>'
          + '<span class="mitte"><strong>'+esc(t?t.name:"—")+'</strong>'
-         + '<small>'+esc(a? a.nummer+" · "+(a.bezeichnung||a.kunde||"") : "ohne Auftrag")
+         + '<small>'+esc(a? (a.kunde||a.bezeichnung||a.nummer)+(z.position_id&&pos(z.position_id)? " · "+pos(z.position_id).bezeichnung : "") : "ohne Auftrag")
          + (z.notiz? " · "+esc(z.notiz):"")+(z._wartet?" · wartet auf Übertragung":"")+'</small>'
          + (z.nachtrag? '<span class="marke">Nachtrag prüfen</span>':'')
          + '</span><span class="h zahl">'+zahl(z.stunden,2)+' h</span></button>';
@@ -595,9 +619,18 @@ function viewFormular(){
      + '<select id="f_auftrag">'
      + '<option value="">– ohne Auftrag –</option>'
      + waehlbar.map(a=>'<option value="'+esc(a.id)+'"'+(a.id===f.auftrag_id?" selected":"")+'>'
-         + esc(a.nummer)+" · "+esc(a.bezeichnung||a.kunde||"")+'</option>').join("")
-     + '</select></div>'
-     + '<button class="knopf zweit klein" id="kleinauftrag" style="margin-bottom:18px">Kleinauftrag anlegen</button>';
+         + esc(a.kunde||a.bezeichnung||"")+" · "+esc(a.nummer)+'</option>').join("")
+     + '</select></div>';
+
+  const ps = f.auftrag_id ? posten(f.auftrag_id) : [];
+  if(ps.length){
+    h += '<div class="feld"><label for="f_position">Posten</label><select id="f_position">'
+       + '<option value="">– ohne Posten –</option>'
+       + ps.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===f.position_id?" selected":"")+'>'
+           + esc(x.bezeichnung)+'</option>').join("")
+       + '</select></div>';
+  }
+  h += '<button class="knopf zweit klein" id="kleinauftrag" style="margin-bottom:18px">Kleinauftrag anlegen</button>';
 
   h += '<h2>Was war das?</h2>'
      + aktiveTaet().map(t=>'<button class="tat'+(t.id===f.taetigkeit_id?" aktiv":"")+'" data-taetigkeit="'+esc(t.id)+'" data-art="'+tatArt(t)+'">'
@@ -698,21 +731,54 @@ function auftraegeFuehrung(){
                  .sort((a,b)=>String(b.abgeschlossen_am||"").localeCompare(String(a.abgeschlossen_am||"")));
   let h="";
 
-  const kritisch = offen.filter(a=>Number(a.kalkulierte_stunden)>0 && istStunden(a.id)/Number(a.kalkulierte_stunden)>=0.8);
+  const kritisch = offen.filter(a=>sollVon(a)>0 && istStunden(a.id)/sollVon(a)>=0.8);
   if(kritisch.length){
     h += '<div class="warnung"><strong>Achtung:</strong> '
-      + kritisch.map(a=>esc(a.nummer)+" ("+zahl(istStunden(a.id)/Number(a.kalkulierte_stunden)*100,0)+" %)").join(", ")
+      + kritisch.map(a=>esc((a.kunde||a.nummer))+" ("+zahl(istStunden(a.id)/sollVon(a)*100,0)+" %)").join(", ")
       + ' haben 80 % der kalkulierten Stunden erreicht.</div>';
   }
 
+  const nach = S.auftraege.filter(a=>a.nachpflegen);
+  if(nach.length){
+    h += '<div class="warnung"><strong>Nachpflegen:</strong> '+nach.length
+      + ' vor Ort angelegte(r) Kleinauftrag/Kleinaufträge warten auf Nummer, Stunden und Summe.</div>'
+      + '<div class="zeilen" style="margin-bottom:18px">'
+      + nach.map(a=>'<button class="buchung" data-auftrag-bearbeiten="'+esc(a.id)+'">'
+        + '<span class="strich" data-art="verlust"></span>'
+        + '<span class="mitte"><strong>'+esc(a.kunde||a.bezeichnung||"Kleinauftrag")+'</strong>'
+        + '<small>'+esc(a.nummer)+' · angelegt vor Ort</small></span>'
+        + '<span class="h zahl">'+zahl(istStunden(a.id),2)+' h</span></button>').join("")
+      + '</div>';
+  }
+
   h += '<h2>Offene Aufträge</h2>';
-  h += offen.length ? offen.map(a=>
-      '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.kunde||"Auftrag")+'</strong>'
-      + '<span class="nr">'+esc(a.nummer)+'</span></div>'
-      + (a.kunde? '<p class="kunde">'+esc(a.kunde)+(a.art?" · "+esc(a.art):"")+'</p>':"")
-      + skalaHtml(istStunden(a.id), a.kalkulierte_stunden)
-      + '<button class="knopf zweit klein" data-auftrag-bearbeiten="'+esc(a.id)+'" style="margin-top:10px">Bearbeiten oder abschließen</button>'
-      + '</div>').join("") : '<p class="leer">Keine offenen Aufträge.</p>';
+  if(!offen.length){ h += '<p class="leer">Keine offenen Aufträge.</p>'; }
+  else{
+    const kunden = [];
+    offen.forEach(a=>{ const k=a.kunde||"ohne Kunde"; if(kunden.indexOf(k)<0) kunden.push(k); });
+    kunden.forEach(k=>{
+      const liste = offen.filter(a=>(a.kunde||"ohne Kunde")===k);
+      h += '<h2 class="kundenkopf">'+esc(k)+'</h2>';
+      liste.forEach(a=>{
+        const ps = posten(a.id);
+        h += '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.nummer)+'</strong>'
+          + '<span class="nr">'+esc(a.nummer)+(a.art?" · "+esc(a.art):"")+'</span></div>'
+          + skalaHtml(istStunden(a.id), sollVon(a));
+        if(ps.length){
+          h += '<div style="margin-top:10px">';
+          ps.forEach(x=>{
+            const pi = istStundenPos(x.id), psoll = Number(x.kalkulierte_stunden)||0;
+            const st = stand(pi, psoll);
+            h += '<div class="kennzahl"><span>'+esc(x.bezeichnung)+'</span>'
+              + '<b class="zahl stand" data-s="'+st.s+'">'+zahl(pi,1)+' von '+zahl(psoll,1)+' h</b></div>';
+          });
+          h += '</div>';
+        }
+        h += '<button class="knopf zweit klein" data-auftrag-bearbeiten="'+esc(a.id)+'" style="margin-top:10px">Bearbeiten, Posten, abschließen</button>'
+          + '</div>';
+      });
+    });
+  }
 
   if(zu.length){
     h += '<h2 class="abstand">Abgeschlossen</h2>'
@@ -725,17 +791,24 @@ function auftraegeWerkstatt(){
   const meine = S.auftraege.filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)>0);
   const offen = S.auftraege.filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)===0);
   let h = '<h2>Woran du arbeitest</h2>';
-  h += meine.length ? meine.map(a=>
-      '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.kunde||"Auftrag")+'</strong>'
-      + '<span class="nr">'+esc(a.nummer)+'</span></div>'
-      + (a.kunde? '<p class="kunde">'+esc(a.kunde)+(a.art?" · "+esc(a.art):"")+'</p>':"")
-      + '<div class="kennzahl" style="border:0;padding:6px 0 0"><span>Deine Stunden</span>'
-      + '<b class="zahl">'+zahl(meineStunden(a.id),2)+' h</b></div></div>').join("")
-    : '<p class="leer">Du hast noch auf keinen Auftrag gebucht.</p>';
+  h += meine.length ? meine.map(a=>{
+      const ps = posten(a.id);
+      let k = '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.kunde||a.bezeichnung||"Auftrag")+'</strong>'
+        + '<span class="nr">'+esc(a.nummer)+'</span></div>'
+        + (a.bezeichnung? '<p class="kunde">'+esc(a.bezeichnung)+(a.art?" · "+esc(a.art):"")+'</p>':"")
+        + '<div class="kennzahl" style="border:0;padding:6px 0 0"><span>Deine Stunden</span>'
+        + '<b class="zahl">'+zahl(meineStunden(a.id),2)+' h</b></div>';
+      ps.forEach(x=>{
+        const eigene = alleZeiten().reduce((sm,z)=> (z.position_id===x.id && z.mitarbeiter_id===S.ich.id) ? sm+Number(z.stunden||0) : sm, 0);
+        if(eigene>0) k += '<div class="kennzahl" style="font-size:13.5px"><span>'+esc(x.bezeichnung)+'</span>'
+          + '<b class="zahl">'+zahl(eigene,2)+' h</b></div>';
+      });
+      return k+'</div>';
+    }).join("") : '<p class="leer">Du hast noch auf keinen Auftrag gebucht.</p>';
 
   if(offen.length){
     h += '<h2 class="abstand">Weitere offene Aufträge</h2><div class="karte">'
-      + offen.map(a=>'<div class="kennzahl"><span>'+esc(a.nummer)+' · '+esc(a.bezeichnung||a.kunde||"")+'</span></div>').join("")
+      + offen.map(a=>'<div class="kennzahl"><span>'+esc(a.kunde||a.bezeichnung||"")+' · '+esc(a.nummer)+'</span></div>').join("")
       + '</div>';
   }
 
@@ -752,16 +825,25 @@ function auftraegeWerkstatt(){
 }
 
 function rueckmeldungHtml(a){
-  const ist = istStunden(a.id), soll = Number(a.kalkulierte_stunden)||0;
+  const ist = istStunden(a.id), soll = sollVon(a);
   const proTaet = {};
   alleZeiten().filter(z=>z.auftrag_id===a.id).forEach(z=>{
     const t=taet(z.taetigkeit_id), n=t?t.name:"ohne Zuordnung";
     proTaet[n] = proTaet[n] || {h:0, art: tatArt(t)};
     proTaet[n].h += Number(z.stunden||0);
   });
-  let h = '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.kunde||"Auftrag")+'</strong>'
+  let h = '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.kunde||a.bezeichnung||"Auftrag")+'</strong>'
     + '<span class="nr">'+esc(a.nummer)+(a.abgeschlossen_am? " · "+datumKurz(a.abgeschlossen_am):"")+'</span></div>'
+    + (a.bezeichnung && a.kunde? '<p class="kunde">'+esc(a.bezeichnung)+'</p>':'')
     + skalaHtml(ist, soll);
+  const ps = posten(a.id);
+  if(ps.length){
+    ps.forEach(x=>{
+      const pi=istStundenPos(x.id), psoll=Number(x.kalkulierte_stunden)||0, st=stand(pi,psoll);
+      h += '<div class="kennzahl"><span>'+esc(x.bezeichnung)+'</span>'
+        + '<b class="zahl stand" data-s="'+st.s+'">'+zahl(pi,1)+' von '+zahl(psoll,1)+' h</b></div>';
+    });
+  }
   Object.keys(proTaet).sort((x,y)=>proTaet[y].h-proTaet[x].h).forEach(n=>{
     const p=proTaet[n], anteil = ist? p.h/ist*100 : 0;
     h += '<div style="padding:7px 0"><div class="kennzahl" style="border:0;padding:0;font-size:13.5px">'
@@ -783,7 +865,8 @@ function viewAuftragsformular(){
      + arten.map(x=>'<option'+(x===f.art?" selected":"")+'>'+x+'</option>').join("")+'</select></div></div>'
      + '<div class="feld"><label for="a_kunde">Kunde</label><input id="a_kunde" type="text" value="'+esc(f.kunde||"")+'"></div>'
      + '<div class="feld"><label for="a_bez">Bezeichnung</label><input id="a_bez" type="text" value="'+esc(f.bezeichnung||"")+'" placeholder="Buchentreppe 1. OG"></div>'
-     + '<div class="zeile"><div class="feld"><label for="a_std">Kalkulierte Stunden</label>'
+     + '<div class="zeile"><div class="feld"><label for="a_std">Kalkulierte Stunden'
+     + ((f.id && posten(f.id).length)? ' (Summe der Posten zählt)':'')+'</label>'
      + '<input id="a_std" type="text" inputmode="decimal" value="'+(f.kalkulierte_stunden!=null?zahl(f.kalkulierte_stunden,2):"")+'"></div>'
      + '<div class="feld"><label for="a_summe">Angebotssumme €</label>'
      + '<input id="a_summe" type="text" inputmode="decimal" value="'+(f.angebotssumme!=null?zahl(f.angebotssumme,2):"")+'"></div></div>'
@@ -793,7 +876,26 @@ function viewAuftragsformular(){
   if(!f.id) h += kalkulationshilfe(f.art || arten[0]);
 
   if(f.id){
-    const ist=istStunden(f.id), soll=Number(f.kalkulierte_stunden)||0;
+    const ps = posten(f.id);
+    h += '<h2 class="abstand">Posten</h2>'
+      + '<p class="hinweis">Ein Auftrag kann mehrere Posten haben – Treppe, Innentüren, Küche – mit eigener Kalkulation. Sind Posten angelegt, ist das Soll des Auftrags ihre Summe.</p>';
+    if(ps.length){
+      h += '<div class="zeilen">'+ps.map(x=>{
+        const pi=istStundenPos(x.id), psoll=Number(x.kalkulierte_stunden)||0, st=stand(pi,psoll);
+        return '<div class="buchung" style="cursor:default"><span class="strich" data-art="'
+          + (st.s==="rot"?"verlust":(st.s==="gelb"?"noetig":"wert"))+'"></span>'
+          + '<span class="mitte"><strong>'+esc(x.bezeichnung)+'</strong>'
+          + '<small>'+zahl(pi,1)+' von '+zahl(psoll,1)+' h</small>'
+          + '<button class="minilink" data-posten-loeschen="'+esc(x.id)+'">löschen</button></span></div>';
+      }).join("")+'</div>';
+    }
+    h += '<div class="zeile"><div class="feld"><label for="p_bez">Neuer Posten</label>'
+      + '<input id="p_bez" type="text" placeholder="z. B. Innentüren EG"></div>'
+      + '<div class="feld"><label for="p_std">Stunden</label>'
+      + '<input id="p_std" type="text" inputmode="decimal" placeholder="0,00"></div></div>'
+      + '<button class="knopf zweit" id="p_hinzu" style="margin-bottom:18px">Posten hinzufügen</button>';
+
+    const ist=istStunden(f.id), soll=sollVon(f);
     h += '<div class="karte">'+skalaHtml(ist,soll)+'</div>'
        + '<div class="feld"><label for="a_notiz">Warum ist es so gelaufen?</label>'
        + '<textarea id="a_notiz" rows="3" placeholder="z. B. zwei Tage Wartezeit auf den Estrich">'+esc(f.abschluss_notiz||"")+'</textarea></div>';
@@ -1102,6 +1204,13 @@ function viewVerwaltung(){
   + '<input id="k_start" type="text" inputmode="decimal" placeholder="0,00"></div></div>'
   + '<button class="knopf zweit" id="k_speichern">Stundenkonto anpassen</button>'
 
+  + '<h2 class="abstand">PIN ändern</h2>'
+  + '<div class="zeile"><div class="feld"><label for="p_person">Person</label>'
+  + '<select id="p_person">'+S.mitarbeiter.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.name)+'</option>').join("")+'</select></div>'
+  + '<div class="feld"><label for="p_pin">Neue PIN</label>'
+  + '<input id="p_pin" type="text" inputmode="numeric" maxlength="6"></div></div>'
+  + '<button class="knopf zweit" id="p_speichern">PIN setzen</button>'
+
   + '<h2 class="abstand">Stundenverrechnungssatz</h2>'
   + '<p class="hinweis">Grundlage für den Deckungsbeitrag und für die Amortisationsrechnung bei den Wünschen.</p>'
   + '<div class="feld"><input id="v_satz" type="text" inputmode="decimal" value="'+esc(S.einst.stundensatz||"")+'"></div>'
@@ -1111,7 +1220,7 @@ function viewVerwaltung(){
   + '<div class="feld"><label for="v_name">Name</label><input id="v_name" type="text"></div>'
   + '<div class="zeile"><div class="feld"><label for="v_rolle">Rolle</label>'
   + '<select id="v_rolle"><option value="werkstatt">Werkstatt</option><option value="fuehrung">Führung</option></select></div>'
-  + '<div class="feld"><label for="v_pin">PIN (nur Führung)</label><input id="v_pin" type="text" inputmode="numeric" maxlength="6"></div></div>'
+  + '<div class="feld"><label for="v_pin">PIN</label><input id="v_pin" type="text" inputmode="numeric" maxlength="6"></div></div>'
   + '<div class="feld"><label for="v_soll">Wochenarbeitszeit in Stunden</label><input id="v_soll" type="text" inputmode="decimal" placeholder="38,50"></div>'
   + '<button class="knopf zweit" id="v_person_speichern">Person anlegen</button>'
 
@@ -1124,7 +1233,6 @@ function viewVerwaltung(){
   + '<div class="trenner"></div>'
   + '<button class="knopf zweit" id="csv">Alle Buchungen als CSV herunterladen</button>'
   + '<button class="knopf zweit" id="neu_laden">Daten neu laden</button>'
-  + (S.pinOk.length ? '<button class="knopf zweit" id="pin_vergessen">PIN auf diesem Gerät wieder abfragen</button>' : '')
   + '<button class="knopf gefahr" id="verbindung_neu">Verbindung zurücksetzen</button>';
 }
 
@@ -1156,17 +1264,24 @@ document.addEventListener("click", async (ev) => {
   const pb = t.closest("[data-person]");
   if(pb){
     const m = person(pb.dataset.person); if(!m) return;
-    if(m.rolle==="fuehrung" && !S.pinOk.includes(m.id)){
-      const eingabe = prompt("PIN für "+m.name);
-      if(eingabe===null) return;
-      let treffer=null;
-      try{
-        treffer = await sb("mitarbeiter?select=id&id=eq."+encodeURIComponent(m.id)
-                          +"&pin=eq."+encodeURIComponent(eingabe.trim()));
-      }catch(e){ return melden("PIN-Prüfung geht nur online"); }
-      if(!treffer || !treffer.length) return melden("PIN stimmt nicht");
-      S.pinOk.push(m.id); sichern("pinOk", S.pinOk);
+    const eingabe = prompt("PIN für "+m.name);
+    if(eingabe===null) return;
+    const pin = eingabe.trim();
+    if(!pin) return melden("Ohne PIN geht es nicht");
+
+    let ok = false;
+    try{
+      const treffer = await sb("mitarbeiter?select=id&id=eq."+encodeURIComponent(m.id)
+                              +"&pin=eq."+encodeURIComponent(pin));
+      ok = !!(treffer && treffer.length);
+      if(ok){ const h = await pruefsumme(m.id, pin); if(h){ S.pinMerk[m.id]=h; sichern("pinMerk", S.pinMerk); } }
+    }catch(e){
+      const h = await pruefsumme(m.id, pin);
+      if(!h || !S.pinMerk[m.id]) return melden("Die erste Anmeldung braucht Netz");
+      ok = (S.pinMerk[m.id] === h);
     }
+    if(!ok) return melden("PIN stimmt nicht");
+
     S.ich={id:m.id,name:m.name,rolle:m.rolle}; sichern("ich",S.ich);
     S.ansicht="tag"; S.tag=heute(); zeichnen(); return;
   }
@@ -1200,7 +1315,8 @@ document.addEventListener("click", async (ev) => {
     const anw = anwesend(S.ich.id, S.tag);
     const schon = summe(zeitenVon(S.ich.id, S.tag));
     const rest = anw!==null ? viertel(anw-schon) : 0;
-    S.form={id:null, auftrag_id:S.letzte.auftrag_id||"", taetigkeit_id:S.letzte.taetigkeit_id||null,
+    S.form={id:null, auftrag_id:S.letzte.auftrag_id||"", position_id:S.letzte.position_id||null,
+            taetigkeit_id:S.letzte.taetigkeit_id||null,
             stunden: rest>0 ? rest : 1, notiz:"", nachtrag:false, foto:null, mehr:false, mit:[]};
     zeichnen(); return;
   }
@@ -1209,13 +1325,14 @@ document.addEventListener("click", async (ev) => {
   if(ist("f_mehr")){
     S.form.stunden = viertel(komma(el("f_stunden").value))||S.form.stunden;
     S.form.auftrag_id = el("f_auftrag").value;
+    S.form.position_id = el("f_position") ? (el("f_position").value||null) : S.form.position_id;
     S.form.mehr = !S.form.mehr;
     zeichnen(); return;
   }
   const be = t.closest("[data-bearbeiten]");
   if(be){
     const z = alleZeiten().find(x=>x.id===be.dataset.bearbeiten); if(!z) return;
-    S.form={id:z.id, auftrag_id:z.auftrag_id||"", taetigkeit_id:z.taetigkeit_id,
+    S.form={id:z.id, auftrag_id:z.auftrag_id||"", position_id:z.position_id||null, taetigkeit_id:z.taetigkeit_id,
             stunden:Number(z.stunden), notiz:z.notiz||"", nachtrag:!!z.nachtrag, foto:null,
             mehr: !!(z.notiz || z.nachtrag), mit:[]};
     zeichnen(); return;
@@ -1238,7 +1355,8 @@ document.addEventListener("click", async (ev) => {
       S.auftraege.filter(a=>String(a.nummer).startsWith("KD-"+heute().replace(/-/g,"").slice(2))).length+1).padStart(2,"0");
     try{
       const neu = await sb("auftraege", {method:"POST", prefer:"return=representation", body:{
-        nummer:nr, kunde:kunde.trim(), bezeichnung:"Kleinauftrag", art:"Kundendienst", kalkulierte_stunden:0
+        nummer:nr, kunde:kunde.trim(), bezeichnung:"Kleinauftrag", art:"Kundendienst",
+        kalkulierte_stunden:0, nachpflegen:true
       }});
       await datenHolen();
       S.form.auftrag_id = (neu && neu[0] && neu[0].id) || "";
@@ -1251,14 +1369,16 @@ document.addEventListener("click", async (ev) => {
   if(ist("uhr_start")){
     if(!S.form || !S.form.taetigkeit_id) return melden("Erst die Tätigkeit auswählen");
     S.uhr={start:Date.now(), taetigkeit_id:S.form.taetigkeit_id,
-           auftrag_id:(el("f_auftrag")? el("f_auftrag").value : "")||null};
+           auftrag_id:(el("f_auftrag")? el("f_auftrag").value : "")||null,
+           position_id:(el("f_position")? el("f_position").value : "")||null};
     sichern("uhr",S.uhr); S.form=null; S.tag=heute(); zeichnen(); return;
   }
   if(ist("uhr_stopp")){
     const std = viertel((Date.now()-S.uhr.start)/3600000);
     const u = S.uhr; S.uhr=null; sichern("uhr",null);
     if(std<0.25){ melden("Unter einer Viertelstunde – nicht gebucht"); zeichnen(); return; }
-    await zeitBuchen([{auftrag_id:u.auftrag_id, taetigkeit_id:u.taetigkeit_id, mitarbeiter_id:S.ich.id,
+    await zeitBuchen([{auftrag_id:u.auftrag_id, position_id:u.position_id||null,
+      taetigkeit_id:u.taetigkeit_id, mitarbeiter_id:S.ich.id,
       datum:heute(), stunden:std, notiz:null, nachtrag:false, foto:null}]);
     return;
   }
@@ -1272,11 +1392,12 @@ document.addEventListener("click", async (ev) => {
     if(tk && tk.auftrag_noetig && !aid) return melden("Für diese Tätigkeit fehlt der Auftrag");
     const std = viertel(komma(el("f_stunden").value));
     if(!(std>0) || std>24) return melden("Stunden zwischen 0,25 und 24 eintragen");
-    const daten = {auftrag_id:aid, taetigkeit_id:f.taetigkeit_id, datum:S.tag, stunden:std,
+    const pid = el("f_position") ? (el("f_position").value||null) : null;
+    const daten = {auftrag_id:aid, position_id:pid, taetigkeit_id:f.taetigkeit_id, datum:S.tag, stunden:std,
       notiz: el("f_notiz") ? (el("f_notiz").value.trim()||null) : (f.notiz||null),
       nachtrag: el("f_nachtrag") ? el("f_nachtrag").checked : !!f.nachtrag,
       foto: f.foto||null};
-    S.letzte = {auftrag_id:aid||"", taetigkeit_id:f.taetigkeit_id}; sichern("letzte", S.letzte);
+    S.letzte = {auftrag_id:aid||"", position_id:pid, taetigkeit_id:f.taetigkeit_id}; sichern("letzte", S.letzte);
 
     if(f.id){
       try{
@@ -1305,6 +1426,27 @@ document.addEventListener("click", async (ev) => {
   const ae = t.closest("[data-auftrag-bearbeiten]");
   if(ae){ S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten)); zeichnen(); return; }
   if(ist("a_abbrechen")){ S.aform=null; zeichnen(); return; }
+  if(ist("p_hinzu")){
+    const bez = el("p_bez").value.trim();
+    if(!bez) return melden("Bezeichnung des Postens fehlt");
+    const std = el("p_std").value.trim()!=="" ? komma(el("p_std").value) : 0;
+    try{
+      await sb("positionen", {method:"POST", prefer:"return=minimal", body:{
+        auftrag_id:S.aform.id, bezeichnung:bez, kalkulierte_stunden:std,
+        sortierung: 100 + posten(S.aform.id).length}});
+      await datenHolen(); melden("Posten angelegt"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  const pl = t.closest("[data-posten-loeschen]");
+  if(pl){
+    if(!confirm("Posten löschen? Gebuchte Stunden bleiben am Auftrag erhalten.")) return;
+    try{
+      await sb("positionen?id=eq."+encodeURIComponent(pl.dataset.postenLoeschen), {method:"DELETE"});
+      await datenHolen(); melden("Gelöscht"); zeichnen();
+    }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
 
   if(ist("a_speichern") || ist("a_abschliessen") || ist("a_oeffnen")){
     const f=S.aform;
@@ -1314,7 +1456,7 @@ document.addEventListener("click", async (ev) => {
       nummer, art: el("a_art").value,
       kunde: el("a_kunde").value.trim()||null,
       bezeichnung: el("a_bez").value.trim()||null,
-      kalkulierte_stunden: komma(el("a_std").value)||0,
+      kalkulierte_stunden: komma(el("a_std").value)||0, nachpflegen: false,
       angebotssumme: el("a_summe").value!=="" ? komma(el("a_summe").value) : null,
       materialkosten: el("a_mat").value!=="" ? komma(el("a_mat").value) : null
     };
@@ -1344,9 +1486,9 @@ document.addEventListener("click", async (ev) => {
   if(ist("v_person_speichern")){
     const name=el("v_name").value.trim(); if(!name) return melden("Name fehlt");
     const rolle=el("v_rolle").value, pin=el("v_pin").value.trim();
-    if(rolle==="fuehrung" && pin.length<4) return melden("Für die Führung bitte eine PIN mit mindestens vier Stellen");
+    if(pin.length<4) return melden("Bitte eine PIN mit mindestens vier Stellen");
     try{
-      await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:rolle==="fuehrung"?pin:null,
+      await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:pin,
         wochensoll: komma(el("v_soll").value)||38.5, arbeitstage:5, startsaldo:0}, prefer:"return=minimal"});
       await datenHolen(); melden("Person angelegt"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
@@ -1355,8 +1497,13 @@ document.addEventListener("click", async (ev) => {
   if(ist("v_taet_speichern")){
     const name=el("v_tname").value.trim(); if(!name) return melden("Bezeichnung fehlt");
     try{
-      await sb("taetigkeiten",{method:"POST", body:{name, wertschoepfend:el("v_twert").checked,
-        verrechenbar:el("v_tverr").checked, auftrag_noetig:true, sortierung:200}, prefer:"return=minimal"});
+      const wert = el("v_twert").checked, verr = el("v_tverr").checked;
+      const art  = wert ? "wert" : (verr ? "noetig" : "verlust");
+      // in den passenden Farbblock einsortieren statt ans Ende hängen
+      const gleiche = S.taetigkeiten.filter(x=>tatArt(x)===art).map(x=>Number(x.sortierung)||0);
+      const sortierung = gleiche.length ? Math.max.apply(null, gleiche)+1 : 200;
+      await sb("taetigkeiten",{method:"POST", body:{name, wertschoepfend:wert,
+        verrechenbar:verr, auftrag_noetig:true, sortierung}, prefer:"return=minimal"});
       await datenHolen(); melden("Tätigkeit angelegt"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
     return;
@@ -1376,6 +1523,16 @@ document.addEventListener("click", async (ev) => {
     }catch(e){ melden("Geht nur online"); }
     return;
   }
+  if(ist("p_speichern")){
+    const mid = el("p_person").value, pin = el("p_pin").value.trim();
+    if(pin.length<4) return melden("Bitte eine PIN mit mindestens vier Stellen");
+    try{
+      await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:{pin}, prefer:"return=minimal"});
+      delete S.pinMerk[mid]; sichern("pinMerk", S.pinMerk);
+      el("p_pin").value=""; melden("PIN gesetzt");
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
   if(ist("v_satz_speichern")){
     const v = komma(el("v_satz").value);
     if(!(v>0)) return melden("Bitte einen Stundensatz eintragen");
@@ -1386,7 +1543,6 @@ document.addEventListener("click", async (ev) => {
     }catch(e){ melden("Geht nur online"); }
     return;
   }
-  if(ist("pin_vergessen")){ S.pinOk=[]; sichern("pinOk",[]); melden("PIN wird wieder abgefragt"); zeichnen(); return; }
   /* --- Reiter Bedarf --- */
   const rt = t.closest("[data-reiter]");
   if(rt){ S.reiter=rt.dataset.reiter; S.wform=null; zeichnen(); return; }
@@ -1467,6 +1623,13 @@ document.addEventListener("change", async (ev) => {
     t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
   }
   if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
+  if(t.id==="f_auftrag" && S.form){
+    S.form.stunden = viertel(komma(el("f_stunden").value))||S.form.stunden;
+    S.form.auftrag_id = t.value;
+    S.form.position_id = null;
+    if(el("f_notiz")) S.form.notiz = el("f_notiz").value;
+    zeichnen(); return;
+  }
   if(t.id==="l_foto"){
     const datei = t.files && t.files[0]; if(!datei) return;
     try{
