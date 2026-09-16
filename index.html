@@ -328,7 +328,7 @@ async function sb(pfad, opt){
 async function datenHolen(){
   try{
     const [a,t,m,z,an,e,lg,wu,po,ko] = await Promise.all([
-      sb("auftraege?select=*&storniert=is.false&order=status.asc,nummer.desc"),
+      sb("auftraege?select=*&order=status.asc,nummer.desc"),
       sb("taetigkeiten?select=*&order=sortierung.asc"),
       sb("mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"),
       sb("zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
@@ -429,6 +429,7 @@ function vorzeichen(v){ return (v>0?"+":"")+zahl(v,2); }
 function taet(id){ return S.taetigkeiten.find(t=>t.id===id); }
 function aktiveTaet(){ return S.taetigkeiten.filter(t=>t.aktiv!==false); }
 function auftrag(id){ return S.auftraege.find(a=>a.id===id); }
+function aktivA(){ return S.auftraege.filter(a=>!a.storniert); }
 function posten(aid){ return S.positionen.filter(p=>p.auftrag_id===aid); }
 function pos(id){ return S.positionen.find(p=>p.id===id); }
 function istStundenPos(pid){ return alleZeiten().reduce((s,z)=> z.position_id===pid ? s+Number(z.stunden||0) : s, 0); }
@@ -723,7 +724,7 @@ function viewTag(){
 /* ---------- Erfassungsformular ---------- */
 function viewFormular(){
   const f = S.form;
-  const waehlbar = S.auftraege.filter(a=>a.status!=="abgeschlossen" || a.id===f.auftrag_id);
+  const waehlbar = aktivA().filter(a=>a.status!=="abgeschlossen" || a.id===f.auftrag_id);
   const andere = S.mitarbeiter.filter(m=>m.id!==S.ich.id);
 
   let h = '<h2>'+(f.id?"Buchung ändern":"Zeit erfassen")
@@ -857,8 +858,8 @@ function viewAuftraege(){
 }
 
 function auftraegeFuehrung(){
-  const offen = S.auftraege.filter(a=>a.status!=="abgeschlossen");
-  const zu    = S.auftraege.filter(a=>a.status==="abgeschlossen")
+  const offen = aktivA().filter(a=>a.status!=="abgeschlossen");
+  const zu    = aktivA().filter(a=>a.status==="abgeschlossen")
                  .sort((a,b)=>String(b.abgeschlossen_am||"").localeCompare(String(a.abgeschlossen_am||"")));
   let h="";
 
@@ -876,7 +877,7 @@ function auftraegeFuehrung(){
     h += '<div class="warnung"><strong>Achtung:</strong> '+warn.join(" · ")+'</div>';
   }
 
-  const nach = S.auftraege.filter(a=>a.nachpflegen);
+  const nach = aktivA().filter(a=>a.nachpflegen);
   if(nach.length){
     h += '<div class="warnung"><strong>Nachpflegen:</strong> '+nach.length
       + ' vorläufige(r) Auftrag/Aufträge warten auf Nummer, Stunden und Summe.</div>'
@@ -917,8 +918,8 @@ function auftraegeFuehrung(){
 }
 
 function auftraegeWerkstatt(){
-  const meine = S.auftraege.filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)>0);
-  const offen = S.auftraege.filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)===0);
+  const meine = aktivA().filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)>0);
+  const offen = aktivA().filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)===0);
   let h = '<h2>Woran du arbeitest</h2>';
   h += meine.length ? meine.map(a=>{
       const ps = posten(a.id);
@@ -942,7 +943,7 @@ function auftraegeWerkstatt(){
   }
 
   if(S.einst.rueckmeldung==="1"){
-    const zu = S.auftraege.filter(a=>a.status==="abgeschlossen" && meineStunden(a.id)>0)
+    const zu = aktivA().filter(a=>a.status==="abgeschlossen" && meineStunden(a.id)>0)
       .sort((a,b)=>String(b.abgeschlossen_am||"").localeCompare(String(a.abgeschlossen_am||"")));
     if(zu.length){
       h += '<h2 class="abstand">Was daraus geworden ist</h2>'
@@ -1152,7 +1153,8 @@ function positionsKarte(x){
     + '</select></div>';
 
   if(art==="festpreis"){
-    h += '<div class="zeile">'
+    h += '<p class="hinweis" style="margin:0 0 10px">Kalkulation eintragen. Die Stunden werden zum Sollmaß der Position.</p>'
+      + '<div class="zeile">'
       + fe("kalkulierte_stunden","Stunden kalk.", zahl(x.kalkulierte_stunden,2))
       + fe("angebotssumme","Angebot €", x.angebotssumme!=null?zahl(x.angebotssumme,0):"")
       + '</div><div class="zeile">'
@@ -1160,18 +1162,22 @@ function positionsKarte(x){
       + fe("fremd_kalk","Fremd kalk. €", x.fremd_kalk!=null?zahl(x.fremd_kalk,0):"")
       + '</div>';
     const st = stand(r.stdIst, r.stdSoll);
-    h += '<div class="kennzahl"><span>Stunden</span><b class="zahl stand" data-s="'+st.s+'">'
+    h += '<div class="kennzahl"><span>Stunden gebucht</span><b class="zahl stand" data-s="'+st.s+'">'
       + zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>';
-    if(r.matSoll!==null) h += '<div class="kennzahl"><span>Material</span><b class="zahl stand" data-s="'
+    if(r.matSoll!==null) h += '<div class="kennzahl"><span>Material tatsächlich</span><b class="zahl stand" data-s="'
       + (r.matIst>r.matSoll?"rot":"gruen")+'">'+euro(r.matIst)+' von '+euro(r.matSoll)+'</b></div>';
+    if(r.fremdIst || r.fremdSoll!==null) h += '<div class="kennzahl"><span>Fremdleistung tatsächlich</span>'
+      + '<b class="zahl">'+euro(r.fremdIst)+(r.fremdSoll!==null? ' von '+euro(r.fremdSoll):'')+'</b></div>';
+    if(r.umsatz!==null) h += '<div class="kennzahl"><span><strong>Ergebnis</strong></span>'
+      + '<b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":"gruen")+'">'+(r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
   }else if(art==="regie"){
-    h += '<div class="zeile">'
-      + fe("materialaufschlag","Materialaufschlag %", x.materialaufschlag!=null?zahl(x.materialaufschlag,0):zahl(S.einst.materialaufschlag,0))
-      + fe("obergrenze","Obergrenze € (freiwillig)", x.obergrenze!=null?zahl(x.obergrenze,0):"")
-      + '</div>'
-      + '<div class="kennzahl"><span>Berechenbare Stunden</span><b class="zahl">'+zahl(r.stdVerrechenbar,1)+' von '+zahl(r.stdIst,1)+' h</b></div>'
+    h += '<p class="hinweis" style="margin:0 0 10px">Hier gibt es nichts zu kalkulieren. Der Betrag entsteht aus den gebuchten Stunden und den erfassten Rechnungen.</p>'
+      + '<div class="kennzahl"><span>Berechenbare Stunden</span><b class="zahl">'
+      + zahl(r.stdVerrechenbar,1)+' von '+zahl(r.stdIst,1)+' h</b></div>'
       + '<div class="kennzahl"><span>Lohn</span><b class="zahl">'+euro(r.lohnVerkauf)+'</b></div>'
-      + '<div class="kennzahl"><span>Material mit Aufschlag</span><b class="zahl">'+euro(r.matIst*(1+aufschlagVon(x)/100))+'</b></div>'
+      + '<div class="kennzahl"><span>Material eingekauft</span><b class="zahl">'+euro(r.matIst)+'</b></div>'
+      + '<div class="kennzahl"><span>Material mit '+zahl(aufschlagVon(x),0)+' % Aufschlag</span>'
+      + '<b class="zahl">'+euro(r.matIst*(1+aufschlagVon(x)/100))+'</b></div>'
       + (r.fremdIst? '<div class="kennzahl"><span>Fremdleistung</span><b class="zahl">'+euro(r.fremdIst)+'</b></div>':'')
       + '<div class="kennzahl"><span><strong>Abzurechnen</strong></span><b class="zahl">'+euro(r.umsatz)+'</b></div>';
     if(r.grenze!==null){
@@ -1179,15 +1185,21 @@ function positionsKarte(x){
       h += '<div class="kennzahl"><span>Obergrenze</span><b class="zahl stand" data-s="'
         + (p>1?"rot":(p>=0.8?"gelb":"gruen"))+'">'+zahl(p*100,0)+' % von '+euro(r.grenze)+'</b></div>';
     }
+    h += '<div class="zeile" style="margin-top:12px">'
+      + fe("materialaufschlag","Materialaufschlag %", x.materialaufschlag!=null?zahl(x.materialaufschlag,0):zahl(S.einst.materialaufschlag,0))
+      + fe("obergrenze","Obergrenze € (freiwillig)", x.obergrenze!=null?zahl(x.obergrenze,0):"")
+      + '</div>'
+      + '<p class="hinweis" style="margin:0">Der Aufschlag gilt für das Material, das du unter „Material und Fremdleistung" einträgst. Obergrenze nur ausfüllen, wenn du dem Kunden einen Kostenvoranschlag genannt hast.</p>';
   }else{
-    h += '<div class="kennzahl"><span>Aufwand ohne Rechnung</span><b class="zahl stand" data-s="rot">'
+    h += '<p class="hinweis" style="margin:0 0 10px">Gewährleistung, Nacharbeit oder eigene Werkstatt. Wird nicht berechnet.</p>'
+      + '<div class="kennzahl"><span>Aufwand ohne Rechnung</span><b class="zahl stand" data-s="rot">'
       + zahl(r.stdIst,1)+' h · '+euro(r.kosten)+'</b></div>';
   }
   return h+'</div>';
 }
 
 function kalkulationshilfe(art){
-  const fertig = S.auftraege.filter(a=>a.status==="abgeschlossen" && a.art===art && istStunden(a.id)>0);
+  const fertig = aktivA().filter(a=>a.status==="abgeschlossen" && a.art===art && istStunden(a.id)>0);
   if(fertig.length<2) return '<p class="hinweis">Sobald zwei Aufträge der Art „'+esc(art)+'" abgeschlossen sind, stehen hier Erfahrungswerte.</p>';
   const istM = fertig.reduce((s,a)=>s+istStunden(a.id),0)/fertig.length;
   const mitSoll = fertig.filter(a=>Number(a.kalkulierte_stunden)>0);
@@ -1417,51 +1429,54 @@ function viewAuswertung(){
       + '</div>';
   }
 
-  // Soll gegen Ist
+  // Soll gegen Ist je Festpreis-Position
   h += '<h2 class="abstand">Kalkulation gegen Wirklichkeit</h2><div class="karte">';
-  const mitSoll = S.auftraege.filter(a=>Number(a.kalkulierte_stunden)>0);
-  if(!mitSoll.length){ h += '<p class="leer">Für keinen Auftrag sind kalkulierte Stunden hinterlegt.</p>'; }
-  else mitSoll.forEach(a=>{
-    const ist=istStunden(a.id), soll=Number(a.kalkulierte_stunden), abw=ist-soll, st=stand(ist,soll);
+  const mitSoll = [];
+  aktivA().forEach(a=>posten(a.id).forEach(x=>{
+    if(artVon(x)==="festpreis" && Number(x.kalkulierte_stunden)>0) mitSoll.push({a,x});
+  }));
+  if(!mitSoll.length){ h += '<p class="leer">Für keine Position sind kalkulierte Stunden hinterlegt.</p>'; }
+  else mitSoll.forEach(e=>{
+    const r=ergebnisPos(e.x), st=stand(r.stdIst,r.stdSoll);
     h += '<div style="padding:10px 0;border-bottom:1px solid var(--linie)">'
-      + '<div class="kennzahl" style="border:0;padding:0"><span>'+esc(a.nummer)+' · '+esc(a.bezeichnung||a.kunde||"")+'</span>'
-      + '<b class="zahl stand" data-s="'+st.s+'">'+(abw>0?"+":"")+zahl(abw,1)+' h</b></div>'
-      + '<div class="skalatext"><span class="zahl">Soll '+zahl(soll,1)+' h</span><span class="zahl">Ist '+zahl(ist,1)+' h</span></div></div>';
+      + '<div class="kennzahl" style="border:0;padding:0"><span>'+esc(e.a.kunde||e.a.nummer)+' · '+esc(e.x.bezeichnung)+'</span>'
+      + '<b class="zahl stand" data-s="'+st.s+'">'+(r.stdAbw>0?"+":"")+zahl(r.stdAbw,1)+' h</b></div>'
+      + '<div class="skalatext"><span class="zahl">Soll '+zahl(r.stdSoll,1)+' h</span><span class="zahl">Ist '+zahl(r.stdIst,1)+' h</span></div></div>';
   });
   h += '</div>';
 
-  // Deckungsbeitrag
-  const mitGeld = S.auftraege.filter(a=>a.angebotssumme!=null && istStunden(a.id)>0);
+  // Deckungsbeitrag je Position
+  const mitGeld = [];
+  aktivA().forEach(a=>posten(a.id).forEach(x=>{
+    const r=ergebnisPos(x);
+    if(r.umsatz!==null && r.umsatz>0 && r.stdIst>0) mitGeld.push({a,x,db:(r.umsatz-r.matIst-r.fremdIst)/r.stdIst});
+  }));
   if(mitGeld.length){
     h += '<h2 class="abstand">Deckungsbeitrag je gebuchter Stunde</h2>'
-      + '<p class="hinweis">Angebotssumme abzüglich Material, geteilt durch die gebuchten Stunden. Der Wert muss über eurem Stundenverrechnungssatz liegen.</p><div class="karte">';
-    mitGeld.slice().sort((a,b)=>{
-      const da=(Number(a.angebotssumme)-Number(a.materialkosten||0))/istStunden(a.id);
-      const db=(Number(b.angebotssumme)-Number(b.materialkosten||0))/istStunden(b.id);
-      return da-db;
-    }).forEach(a=>{
-      const db=(Number(a.angebotssumme)-Number(a.materialkosten||0))/istStunden(a.id);
-      h += '<div class="kennzahl"><span>'+esc(a.nummer)+' · '+esc(a.art||a.bezeichnung||"")+'</span>'
-        + '<b class="zahl">'+zahl(db,2)+' €/h</b></div>';
+      + '<p class="hinweis">Umsatz abzüglich Material und Fremdleistung, geteilt durch die gebuchten Stunden. Der Wert muss über eurem Verrechnungssatz liegen.</p><div class="karte">';
+    mitGeld.sort((p,q)=>p.db-q.db).forEach(e=>{
+      h += '<div class="kennzahl"><span>'+esc(e.a.kunde||e.a.nummer)+' · '+esc(e.x.bezeichnung)+'</span>'
+        + '<b class="zahl stand" data-s="'+(e.db<satzVerkauf(null)?"rot":"gruen")+'">'+zahl(e.db,2)+' €/h</b></div>';
     });
     h += '</div>';
   }
 
   // nach Auftragsart
   const proArt={};
-  S.auftraege.forEach(a=>{
+  aktivA().forEach(a=>{
     const ist=istStunden(a.id); if(!ist) return;
     const k=a.art||"ohne Angabe";
-    proArt[k]=proArt[k]||{h:0,umsatz:0,material:0,n:0};
+    const g=ergebnisAuftrag(a);
+    proArt[k]=proArt[k]||{h:0,umsatz:0,kosten:0,n:0};
     proArt[k].h+=ist; proArt[k].n++;
-    if(a.angebotssumme!=null){ proArt[k].umsatz+=Number(a.angebotssumme); proArt[k].material+=Number(a.materialkosten||0); }
+    if(g.volumen!==null){ proArt[k].umsatz+=g.volumen; proArt[k].kosten+=g.kosten; }
   });
   if(Object.keys(proArt).length){
     h += '<h2 class="abstand">Nach Auftragsart</h2><div class="karte">'
       + Object.keys(proArt).sort((a,b)=>proArt[b].h-proArt[a].h).map(k=>{
-          const p=proArt[k], db=p.umsatz? (p.umsatz-p.material)/p.h : null;
+          const p=proArt[k], erg=p.umsatz? p.umsatz-p.kosten : null;
           return '<div class="kennzahl"><span>'+esc(k)+' ('+p.n+')</span><b class="zahl">'
-            + zahl(p.h,1)+' h'+(db!==null? ' · '+zahl(db,0)+' €/h':'')+'</b></div>';
+            + zahl(p.h,1)+' h'+(erg!==null? ' · '+(erg>0?"+":"")+euro(erg):'')+'</b></div>';
         }).join("")+'</div>';
   }
   return h;
@@ -1470,8 +1485,26 @@ function viewAuswertung(){
 /* ---------- Verwaltung ---------- */
 function viewVerwaltung(){
   const rueck = S.einst.rueckmeldung==="1";
-  return '<h2>Neuen Auftrag anlegen</h2>'
-  + '<button class="knopf" id="auftrag_neu">Auftrag anlegen</button>'
+  const alle = S.auftraege.slice().sort((a,b)=>String(a.kunde||"").localeCompare(String(b.kunde||"")));
+  return '<h2>Aufträge</h2>'
+  + '<button class="knopf" id="auftrag_neu">Neuen Auftrag anlegen</button>'
+  + '<p class="hinweis">Alle Aufträge, auch stornierte. Löschen geht nur, solange keine Stunden gebucht sind.</p>'
+  + (alle.length ? '<div class="zeilen">'+alle.map(a=>{
+      const std = istStunden(a.id);
+      const zustand = a.storniert ? "storniert" : (a.status==="abgeschlossen" ? "abgeschlossen" : "offen");
+      return '<div class="buchung" style="cursor:default">'
+        + '<span class="strich" data-art="'+(a.storniert?"verlust":(a.status==="abgeschlossen"?"wert":"noetig"))+'"></span>'
+        + '<span class="mitte"><strong>'+esc(a.kunde||a.bezeichnung||"Auftrag")+'</strong>'
+        + '<small>'+esc(a.nummer)+' · '+zustand+' · '+zahl(std,1)+' h · '+posten(a.id).length+' Pos.</small>'
+        + '<span style="display:block;margin-top:6px">'
+        + '<button class="minilink" style="color:var(--holz);margin-right:14px" data-auftrag-bearbeiten="'+esc(a.id)+'">bearbeiten</button>'
+        + (a.storniert
+            ? '<button class="minilink" style="color:var(--gruen)" data-auftrag-aktivieren="'+esc(a.id)+'">wieder aktivieren</button>'
+            : (std>0
+                ? '<button class="minilink" data-auftrag-stornieren="'+esc(a.id)+'">stornieren</button>'
+                : '<button class="minilink" data-auftrag-loeschen="'+esc(a.id)+'">löschen</button>'))
+        + '</span></span></div>';
+    }).join("")+'</div>' : '<p class="leer">Keine Aufträge angelegt.</p>')
 
   + '<h2 class="abstand">Rückmeldung an die Belegschaft</h2>'
   + '<p class="hinweis">Ist dies eingeschaltet, sehen Mitarbeiter nach Abschluss eines Auftrags, wie viele Stunden gebraucht wurden und wofür. Während der Auftrag läuft, sehen sie weiterhin nur ihre eigenen Stunden.</p>'
@@ -1767,7 +1800,10 @@ document.addEventListener("click", async (ev) => {
     S.aform={id:null, art:"Treppe"}; S.ansicht="auftraege"; zeichnen(); return;
   }
   const ae = t.closest("[data-auftrag-bearbeiten]");
-  if(ae){ S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten)); zeichnen(); return; }
+  if(ae){
+    S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten));
+    S.aufgeklappt={}; S.ansicht="auftraege"; zeichnen(); return;
+  }
   if(ist("a_abbrechen")){ S.aform=null; zeichnen(); return; }
   const kl = t.closest("[data-klappe]");
   if(kl){
@@ -1796,6 +1832,37 @@ document.addEventListener("click", async (ev) => {
       await sb("kosten?id=eq."+encodeURIComponent(kloe.dataset.kostenLoeschen), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht"); zeichnen();
     }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
+  const alo = t.closest("[data-auftrag-loeschen]");
+  if(alo){
+    const id = alo.dataset.auftragLoeschen;
+    if(istStunden(id)>0) return melden("Es sind Stunden gebucht – bitte stornieren");
+    const a = auftrag(id);
+    if(!confirm("Auftrag "+((a&&(a.kunde||a.nummer))||"")+" mit allen Positionen löschen?")) return;
+    try{
+      await sb("auftraege?id=eq."+encodeURIComponent(id), {method:"DELETE"});
+      await datenHolen(); melden("Gelöscht"); zeichnen();
+    }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
+  const ast = t.closest("[data-auftrag-stornieren]");
+  if(ast){
+    if(!confirm("Auftrag stornieren? Er verschwindet aus allen Listen, die gebuchten Stunden bleiben erhalten.")) return;
+    try{
+      await sb("auftraege?id=eq."+encodeURIComponent(ast.dataset.auftragStornieren),
+        {method:"PATCH", body:{storniert:true, status:"abgeschlossen"}, prefer:"return=minimal"});
+      await datenHolen(); melden("Storniert"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  const aak = t.closest("[data-auftrag-aktivieren]");
+  if(aak){
+    try{
+      await sb("auftraege?id=eq."+encodeURIComponent(aak.dataset.auftragAktivieren),
+        {method:"PATCH", body:{storniert:false, status:"offen"}, prefer:"return=minimal"});
+      await datenHolen(); melden("Wieder aktiv"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
     return;
   }
   if(ist("a_loeschen")){
