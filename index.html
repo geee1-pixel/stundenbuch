@@ -229,6 +229,7 @@ const S = {
   ansicht: "tag",
   tag: heute(),
   form: null,     // offenes Erfassungsformular
+  vform: null,    // Formular für einen vorläufigen Auftrag
   lagerFoto: null,
   wform: null,
   aform: null,    // offenes Auftragsformular
@@ -332,6 +333,7 @@ async function datenHolen(){
     S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
     if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
     if(S.einst.stundensatz===undefined) S.einst.stundensatz="60";
+    if(S.einst.kostensatz===undefined) S.einst.kostensatz="45";
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
              zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen};
     sichern("cache",S.cache);
@@ -425,6 +427,46 @@ function sollVon(a){
   if(ps.length) return ps.reduce((s,p)=>s+Number(p.kalkulierte_stunden||0),0);
   return Number(a.kalkulierte_stunden)||0;
 }
+function satzVerkauf(){ return Number(S.einst.stundensatz)||0; }
+function satzKosten(){ return Number(S.einst.kostensatz)||satzVerkauf(); }
+
+// Ergebnis einer Position: Angebot abzüglich Material und Lohnkosten
+function ergebnisPos(x){
+  const angebot  = x.angebotssumme!=null ? Number(x.angebotssumme) : null;
+  const material = Number(x.materialkosten||0);
+  const stdIst   = istStundenPos(x.id);
+  const stdSoll  = Number(x.kalkulierte_stunden)||0;
+  const lohn     = stdIst*satzKosten();
+  return {angebot, material, stdIst, stdSoll, lohn,
+          kosten: angebot!==null ? material+lohn : null,
+          ergebnis: angebot!==null ? angebot-material-lohn : null,
+          stdAbw: stdIst-stdSoll};
+}
+// Summen über einen Auftrag: Positionen, sonst der Auftrag selbst
+function ergebnisAuftrag(a){
+  const ps = posten(a.id);
+  if(ps.length){
+    let volumen=0, material=0, lohn=0, mitGeld=0;
+    ps.forEach(x=>{
+      const r = ergebnisPos(x);
+      if(r.angebot!==null){ volumen+=r.angebot; mitGeld++; }
+      material += Number(x.materialkosten||0);
+      lohn     += r.lohn;
+    });
+    return {volumen: mitGeld? volumen : null, material, lohn,
+            ergebnis: mitGeld? volumen-material-lohn : null, posten:ps};
+  }
+  const angebot = a.angebotssumme!=null ? Number(a.angebotssumme) : null;
+  const material = Number(a.materialkosten||0);
+  const lohn = istStunden(a.id)*satzKosten();
+  return {volumen: angebot, material, lohn,
+          ergebnis: angebot!==null ? angebot-material-lohn : null, posten:[]};
+}
+function euro(v){
+  const n = Math.round(Number(v)||0);
+  const vz = n<0 ? "-" : "";
+  return vz + String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ".") + " €";
+}
 function person(id){ return S.mitarbeiter.find(m=>m.id===id); }
 
 function alleLager(){
@@ -509,7 +551,7 @@ function zeichnen(){
 }
 function nachher(){
   const ab=el("abmelden");
-  if(ab) ab.onclick=()=>{ S.ich=null; sichern("ich",null); S.form=null; S.aform=null; zeichnen(); };
+  if(ab) ab.onclick=()=>{ S.ich=null; sichern("ich",null); S.form=null; S.aform=null; S.vform=null; zeichnen(); };
   if(S.uhr) uhrTicken();
 }
 
@@ -538,6 +580,7 @@ function viewPerson(){
 
 /* ---------- Tagesansicht ---------- */
 function viewTag(){
+  if(S.vform) return viewVorlaeufig();
   if(S.form) return viewFormular();
 
   const d = S.tag;
@@ -623,14 +666,16 @@ function viewFormular(){
      + '</select></div>';
 
   const ps = f.auftrag_id ? posten(f.auftrag_id) : [];
-  if(ps.length){
-    h += '<div class="feld"><label for="f_position">Posten</label><select id="f_position">'
-       + '<option value="">– ohne Posten –</option>'
-       + ps.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===f.position_id?" selected":"")+'>'
-           + esc(x.bezeichnung)+'</option>').join("")
-       + '</select></div>';
-  }
-  h += '<button class="knopf zweit klein" id="kleinauftrag" style="margin-bottom:18px">Kleinauftrag anlegen</button>';
+  h += '<div class="feld"><label for="f_position">Position</label><select id="f_position"'
+     + (f.auftrag_id? '' : ' disabled')+'>'
+     + '<option value="">'+(f.auftrag_id ? (ps.length? '– ohne Position –' : '– noch keine Position angelegt –') : '– erst Auftrag wählen –')+'</option>'
+     + ps.map(x=>'<option value="'+esc(x.id)+'"'+(x.id===f.position_id?" selected":"")+'>'
+         + esc(x.bezeichnung)+'</option>').join("")
+     + '</select></div>'
+     + '<div class="zeile" style="margin-bottom:18px">'
+     + '<button class="knopf zweit klein" id="vorlaeufig">Vorläufiger Auftrag</button>'
+     + (f.auftrag_id ? '<button class="knopf zweit klein" id="pos_neu">Position anlegen</button>' : '')
+     + '</div>';
 
   h += '<h2>Was war das?</h2>'
      + aktiveTaet().map(t=>'<button class="tat'+(t.id===f.taetigkeit_id?" aktiv":"")+'" data-taetigkeit="'+esc(t.id)+'" data-art="'+tatArt(t)+'">'
@@ -673,6 +718,21 @@ function viewFormular(){
      + (f.id? '<button class="knopf gefahr" id="f_loeschen">Eintrag löschen</button>' : '')
      + '<button class="knopf zweit" id="f_abbrechen">Abbrechen und zurück zum Hauptmenü</button>';
   return h;
+}
+
+/* ---------- Vorläufiger Auftrag ---------- */
+function viewVorlaeufig(){
+  const f = S.vform;
+  return '<h2>Vorläufiger Auftrag</h2>'
+  + '<p class="hinweis">Für Arbeiten, die noch keine Auftragsnummer haben. Die Führung ergänzt Nummer, Stunden und Summe später – der Auftrag erscheint dort unter „Nachpflegen".</p>'
+  + '<div class="feld"><label for="v_kunde2">Kunde</label>'
+  + '<input id="v_kunde2" type="text" value="'+esc(f.kunde||"")+'" placeholder="z. B. Wunner"></div>'
+  + '<div class="feld"><label for="v_bez2">Auftrag</label>'
+  + '<input id="v_bez2" type="text" value="'+esc(f.bezeichnung||"")+'" placeholder="z. B. Umbau Erdgeschoss"></div>'
+  + '<div class="feld"><label for="v_pos2">Position</label>'
+  + '<input id="v_pos2" type="text" value="'+esc(f.position||"")+'" placeholder="z. B. Treppe"></div>'
+  + '<button class="knopf" id="v_anlegen">Anlegen und übernehmen</button>'
+  + '<button class="knopf zweit" id="v_zurueck">Zurück</button>';
 }
 
 /* ---------- Woche ---------- */
@@ -741,12 +801,12 @@ function auftraegeFuehrung(){
   const nach = S.auftraege.filter(a=>a.nachpflegen);
   if(nach.length){
     h += '<div class="warnung"><strong>Nachpflegen:</strong> '+nach.length
-      + ' vor Ort angelegte(r) Kleinauftrag/Kleinaufträge warten auf Nummer, Stunden und Summe.</div>'
+      + ' vorläufige(r) Auftrag/Aufträge warten auf Nummer, Stunden und Summe.</div>'
       + '<div class="zeilen" style="margin-bottom:18px">'
       + nach.map(a=>'<button class="buchung" data-auftrag-bearbeiten="'+esc(a.id)+'">'
         + '<span class="strich" data-art="verlust"></span>'
-        + '<span class="mitte"><strong>'+esc(a.kunde||a.bezeichnung||"Kleinauftrag")+'</strong>'
-        + '<small>'+esc(a.nummer)+' · angelegt vor Ort</small></span>'
+        + '<span class="mitte"><strong>'+esc(a.kunde||a.bezeichnung||"Vorläufiger Auftrag")+'</strong>'
+        + '<small>'+esc(a.nummer)+' · vor Ort angelegt'+(posten(a.id).length? ' · '+posten(a.id).map(x=>x.bezeichnung).join(", ") : '')+'</small></span>'
         + '<span class="h zahl">'+zahl(istStunden(a.id),2)+' h</span></button>').join("")
       + '</div>';
   }
@@ -764,16 +824,7 @@ function auftraegeFuehrung(){
         h += '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.bezeichnung||a.nummer)+'</strong>'
           + '<span class="nr">'+esc(a.nummer)+(a.art?" · "+esc(a.art):"")+'</span></div>'
           + skalaHtml(istStunden(a.id), sollVon(a));
-        if(ps.length){
-          h += '<div style="margin-top:10px">';
-          ps.forEach(x=>{
-            const pi = istStundenPos(x.id), psoll = Number(x.kalkulierte_stunden)||0;
-            const st = stand(pi, psoll);
-            h += '<div class="kennzahl"><span>'+esc(x.bezeichnung)+'</span>'
-              + '<b class="zahl stand" data-s="'+st.s+'">'+zahl(pi,1)+' von '+zahl(psoll,1)+' h</b></div>';
-          });
-          h += '</div>';
-        }
+        h += geldHtml(a);
         h += '<button class="knopf zweit klein" data-auftrag-bearbeiten="'+esc(a.id)+'" style="margin-top:10px">Bearbeiten, Posten, abschließen</button>'
           + '</div>';
       });
@@ -824,6 +875,40 @@ function auftraegeWerkstatt(){
   return h;
 }
 
+// Volumen, Ergebnis und Abweichung je Position
+function geldHtml(a){
+  const g = ergebnisAuftrag(a);
+  const ps = g.posten;
+  let h = '';
+  if(ps.length){
+    h += '<div style="margin-top:10px">';
+    ps.forEach(x=>{
+      const r = ergebnisPos(x);
+      const st = stand(r.stdIst, r.stdSoll);
+      h += '<div style="padding:8px 0;border-top:1px solid var(--linie)">'
+        + '<div class="kennzahl" style="border:0;padding:0"><span><strong>'+esc(x.bezeichnung)+'</strong></span>'
+        + '<b class="zahl stand" data-s="'+st.s+'">'+zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>';
+      if(r.angebot!==null){
+        h += '<div class="kennzahl" style="border:0;padding:3px 0 0;font-size:13.5px;color:var(--grau)">'
+          + '<span>Angebot '+euro(r.angebot)+' · Kosten '+euro(r.kosten)+'</span>'
+          + '<b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":(r.ergebnis>0?"gruen":"grau"))+'">'
+          + (r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+  if(g.volumen!==null){
+    h += '<div class="bilanz" style="margin:12px 0 0">'
+      + '<div class="oben"><span>Gesamtvolumen</span><span class="zahl">'+euro(g.volumen)+'</span></div>'
+      + '<div class="oben" style="margin-top:5px;color:var(--grau);font-size:13.5px">'
+      + '<span>Material '+euro(g.material)+' · Lohn '+euro(g.lohn)+'</span></div>'
+      + '<div class="rest" data-s="'+(g.ergebnis<0?"zuviel":(g.ergebnis>0?"voll":"offen"))+'">'
+      + '<span>Ergebnis</span><span class="zahl">'+(g.ergebnis>0?"+":"")+euro(g.ergebnis)+'</span></div></div>';
+  }
+  return h;
+}
+
 function rueckmeldungHtml(a){
   const ist = istStunden(a.id), soll = sollVon(a);
   const proTaet = {};
@@ -837,7 +922,7 @@ function rueckmeldungHtml(a){
     + (a.bezeichnung && a.kunde? '<p class="kunde">'+esc(a.bezeichnung)+'</p>':'')
     + skalaHtml(ist, soll);
   const ps = posten(a.id);
-  if(ps.length){
+  if(ps.length && S.ich.rolle!=="fuehrung"){
     ps.forEach(x=>{
       const pi=istStundenPos(x.id), psoll=Number(x.kalkulierte_stunden)||0, st=stand(pi,psoll);
       h += '<div class="kennzahl"><span>'+esc(x.bezeichnung)+'</span>'
@@ -850,6 +935,7 @@ function rueckmeldungHtml(a){
       + '<span>'+esc(n)+'</span><b class="zahl">'+zahl(p.h,1)+' h</b></div>'
       + '<div class="balken"><i class="'+p.art+'" style="width:'+anteil.toFixed(1)+'%"></i></div></div>';
   });
+  if(S.ich.rolle==="fuehrung") h += geldHtml(a);
   if(a.abschluss_notiz) h += '<p class="hinweis" style="margin:10px 0 0">'+esc(a.abschluss_notiz)+'</p>';
   return h+'</div>';
 }
@@ -868,10 +954,11 @@ function viewAuftragsformular(){
      + '<div class="zeile"><div class="feld"><label for="a_std">Kalkulierte Stunden'
      + ((f.id && posten(f.id).length)? ' (Summe der Posten zählt)':'')+'</label>'
      + '<input id="a_std" type="text" inputmode="decimal" value="'+(f.kalkulierte_stunden!=null?zahl(f.kalkulierte_stunden,2):"")+'"></div>'
-     + '<div class="feld"><label for="a_summe">Angebotssumme €</label>'
-     + '<input id="a_summe" type="text" inputmode="decimal" value="'+(f.angebotssumme!=null?zahl(f.angebotssumme,2):"")+'"></div></div>'
+     + '<div class="feld"><label for="a_summe">Angebotssumme €'
+     + ((f.id && posten(f.id).length)? ' (Summe der Posten zählt)':'')+'</label>'
+     + '<input id="a_summe" type="text" inputmode="decimal" value="'+(f.angebotssumme!=null?zahl(f.angebotssumme,0):"")+'"></div></div>'
      + '<div class="feld"><label for="a_mat">Materialkosten €</label>'
-     + '<input id="a_mat" type="text" inputmode="decimal" value="'+(f.materialkosten!=null?zahl(f.materialkosten,2):"")+'"></div>';
+     + '<input id="a_mat" type="text" inputmode="decimal" value="'+(f.materialkosten!=null?zahl(f.materialkosten,0):"")+'"></div>';
 
   if(!f.id) h += kalkulationshilfe(f.art || arten[0]);
 
@@ -880,20 +967,33 @@ function viewAuftragsformular(){
     h += '<h2 class="abstand">Posten</h2>'
       + '<p class="hinweis">Ein Auftrag kann mehrere Posten haben – Treppe, Innentüren, Küche – mit eigener Kalkulation. Sind Posten angelegt, ist das Soll des Auftrags ihre Summe.</p>';
     if(ps.length){
-      h += '<div class="zeilen">'+ps.map(x=>{
-        const pi=istStundenPos(x.id), psoll=Number(x.kalkulierte_stunden)||0, st=stand(pi,psoll);
-        return '<div class="buchung" style="cursor:default"><span class="strich" data-art="'
-          + (st.s==="rot"?"verlust":(st.s==="gelb"?"noetig":"wert"))+'"></span>'
-          + '<span class="mitte"><strong>'+esc(x.bezeichnung)+'</strong>'
-          + '<small>'+zahl(pi,1)+' von '+zahl(psoll,1)+' h</small>'
-          + '<button class="minilink" data-posten-loeschen="'+esc(x.id)+'">löschen</button></span></div>';
-      }).join("")+'</div>';
+      h += ps.map(x=>{
+        const r=ergebnisPos(x), st=stand(r.stdIst,r.stdSoll);
+        return '<div class="karte"><div class="auftragkopf"><strong>'+esc(x.bezeichnung)+'</strong>'
+          + '<button class="minilink" data-posten-loeschen="'+esc(x.id)+'">löschen</button></div>'
+          + '<div class="kennzahl"><span>Gebucht</span><b class="zahl stand" data-s="'+st.s+'">'
+          + zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>'
+          + '<div class="zeile" style="margin-top:8px">'
+          + '<div class="feld"><label for="ps_'+esc(x.id)+'_std">Stunden</label>'
+          + '<input id="ps_'+esc(x.id)+'_std" class="pfeld" data-pid="'+esc(x.id)+'" data-feld="kalkulierte_stunden" type="text" inputmode="decimal" value="'+zahl(x.kalkulierte_stunden,2)+'"></div>'
+          + '<div class="feld"><label for="ps_'+esc(x.id)+'_ang">Angebot €</label>'
+          + '<input id="ps_'+esc(x.id)+'_ang" class="pfeld" data-pid="'+esc(x.id)+'" data-feld="angebotssumme" type="text" inputmode="decimal" value="'+(x.angebotssumme!=null?zahl(x.angebotssumme,0):"")+'"></div>'
+          + '<div class="feld"><label for="ps_'+esc(x.id)+'_mat">Material €</label>'
+          + '<input id="ps_'+esc(x.id)+'_mat" class="pfeld" data-pid="'+esc(x.id)+'" data-feld="materialkosten" type="text" inputmode="decimal" value="'+(x.materialkosten!=null?zahl(x.materialkosten,0):"")+'"></div>'
+          + '</div></div>';
+      }).join("");
+      h += '<p class="hinweis">Änderungen an diesen Feldern werden sofort gespeichert.</p>';
     }
     h += '<div class="zeile"><div class="feld"><label for="p_bez">Neuer Posten</label>'
       + '<input id="p_bez" type="text" placeholder="z. B. Innentüren EG"></div>'
       + '<div class="feld"><label for="p_std">Stunden</label>'
       + '<input id="p_std" type="text" inputmode="decimal" placeholder="0,00"></div></div>'
-      + '<button class="knopf zweit" id="p_hinzu" style="margin-bottom:18px">Posten hinzufügen</button>';
+      + '<div class="zeile"><div class="feld"><label for="p_ang">Angebot €</label>'
+      + '<input id="p_ang" type="text" inputmode="decimal"></div>'
+      + '<div class="feld"><label for="p_mat">Material €</label>'
+      + '<input id="p_mat" type="text" inputmode="decimal"></div></div>'
+      + '<button class="knopf zweit" id="p_hinzu" style="margin-bottom:18px">Posten hinzufügen</button>'
+      + geldHtml(f);
 
     const ist=istStunden(f.id), soll=sollVon(f);
     h += '<div class="karte">'+skalaHtml(ist,soll)+'</div>'
@@ -1211,10 +1311,13 @@ function viewVerwaltung(){
   + '<input id="p_pin" type="text" inputmode="numeric" maxlength="6"></div></div>'
   + '<button class="knopf zweit" id="p_speichern">PIN setzen</button>'
 
-  + '<h2 class="abstand">Stundenverrechnungssatz</h2>'
-  + '<p class="hinweis">Grundlage für den Deckungsbeitrag und für die Amortisationsrechnung bei den Wünschen.</p>'
-  + '<div class="feld"><input id="v_satz" type="text" inputmode="decimal" value="'+esc(S.einst.stundensatz||"")+'"></div>'
-  + '<button class="knopf zweit" id="v_satz_speichern">Satz speichern</button>'
+  + '<h2 class="abstand">Stundensätze</h2>'
+  + '<p class="hinweis">Der Verrechnungssatz ist, was du dem Kunden pro Stunde berechnest – Grundlage für Deckungsbeitrag und Amortisation. Der Kostensatz ist, was dich eine Arbeitsstunde tatsächlich kostet (Lohn, Nebenkosten, Werkstatt, Maschinen) – Grundlage für das Ergebnis je Position. Er liegt immer unter dem Verrechnungssatz.</p>'
+  + '<div class="zeile"><div class="feld"><label for="v_satz">Verrechnungssatz €/h</label>'
+  + '<input id="v_satz" type="text" inputmode="decimal" value="'+esc(S.einst.stundensatz||"")+'"></div>'
+  + '<div class="feld"><label for="v_kosten">Kostensatz €/h</label>'
+  + '<input id="v_kosten" type="text" inputmode="decimal" value="'+esc(S.einst.kostensatz||"")+'"></div></div>'
+  + '<button class="knopf zweit" id="v_satz_speichern">Sätze speichern</button>'
 
   + '<h2 class="abstand">Neue Person</h2>'
   + '<div class="feld"><label for="v_name">Name</label><input id="v_name" type="text"></div>'
@@ -1244,7 +1347,7 @@ document.addEventListener("click", async (ev) => {
   const ist = (id) => t.closest("#"+id);
 
   const navBtn = t.closest("#nav button");
-  if(navBtn){ S.ansicht=navBtn.dataset.ansicht; S.form=null; S.aform=null; S.wform=null; zeichnen(); return; }
+  if(navBtn){ S.ansicht=navBtn.dataset.ansicht; S.form=null; S.aform=null; S.wform=null; S.vform=null; zeichnen(); return; }
 
   /* --- Einrichtung --- */
   if(ist("setup_speichern")){
@@ -1347,21 +1450,55 @@ document.addEventListener("click", async (ev) => {
     return;
   }
 
-  /* --- Kleinauftrag --- */
-  if(ist("kleinauftrag")){
-    const kunde = prompt("Name des Kunden");
-    if(!kunde || !kunde.trim()) return;
-    const nr = "KD-"+heute().replace(/-/g,"").slice(2)+"-"+String(
-      S.auftraege.filter(a=>String(a.nummer).startsWith("KD-"+heute().replace(/-/g,"").slice(2))).length+1).padStart(2,"0");
+  /* --- Vorläufiger Auftrag --- */
+  if(ist("vorlaeufig")){
+    S.form.stunden = viertel(komma(el("f_stunden").value))||S.form.stunden;
+    S.form.auftrag_id = el("f_auftrag").value;
+    if(el("f_notiz")) S.form.notiz = el("f_notiz").value;
+    S.vform = {kunde:"", bezeichnung:"", position:""};
+    zeichnen(); return;
+  }
+  if(ist("v_zurueck")){ S.vform=null; zeichnen(); return; }
+  if(ist("v_anlegen")){
+    const kunde = el("v_kunde2").value.trim();
+    const bez   = el("v_bez2").value.trim();
+    const posn  = el("v_pos2").value.trim();
+    if(!kunde && !bez) return melden("Kunde oder Auftrag muss ausgefüllt sein");
+    const stamm = "VL-"+heute().replace(/-/g,"").slice(2);
+    const nr = stamm+"-"+String(S.auftraege.filter(a=>String(a.nummer).indexOf(stamm)===0).length+1).padStart(2,"0");
     try{
       const neu = await sb("auftraege", {method:"POST", prefer:"return=representation", body:{
-        nummer:nr, kunde:kunde.trim(), bezeichnung:"Kleinauftrag", art:"Kundendienst",
-        kalkulierte_stunden:0, nachpflegen:true
-      }});
+        nummer:nr, kunde:kunde||null, bezeichnung:bez||"Vorläufiger Auftrag",
+        art:"Kundendienst", kalkulierte_stunden:0, nachpflegen:true}});
+      const aid = neu && neu[0] && neu[0].id;
+      let pid = null;
+      if(aid && posn){
+        const np = await sb("positionen", {method:"POST", prefer:"return=representation", body:{
+          auftrag_id:aid, bezeichnung:posn, kalkulierte_stunden:0, sortierung:100}});
+        pid = np && np[0] && np[0].id;
+      }
       await datenHolen();
-      S.form.auftrag_id = (neu && neu[0] && neu[0].id) || "";
-      melden("Kleinauftrag "+nr+" angelegt"); zeichnen();
+      S.form.auftrag_id = aid||""; S.form.position_id = pid;
+      S.vform = null;
+      melden("Angelegt als "+nr); zeichnen();
     }catch(e){ melden("Geht nur online: "+e.message); }
+    return;
+  }
+  if(ist("pos_neu")){
+    const aid = el("f_auftrag").value;
+    if(!aid) return melden("Erst einen Auftrag wählen");
+    const name = prompt("Bezeichnung der Position");
+    if(!name || !name.trim()) return;
+    S.form.stunden = viertel(komma(el("f_stunden").value))||S.form.stunden;
+    S.form.auftrag_id = aid;
+    try{
+      const np = await sb("positionen", {method:"POST", prefer:"return=representation", body:{
+        auftrag_id:aid, bezeichnung:name.trim(), kalkulierte_stunden:0,
+        sortierung:100+posten(aid).length}});
+      await datenHolen();
+      S.form.position_id = (np && np[0] && np[0].id) || null;
+      melden("Position angelegt"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
     return;
   }
 
@@ -1433,6 +1570,8 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("positionen", {method:"POST", prefer:"return=minimal", body:{
         auftrag_id:S.aform.id, bezeichnung:bez, kalkulierte_stunden:std,
+        angebotssumme:  el("p_ang").value.trim()!=="" ? komma(el("p_ang").value) : null,
+        materialkosten: el("p_mat").value.trim()!=="" ? komma(el("p_mat").value) : null,
         sortierung: 100 + posten(S.aform.id).length}});
       await datenHolen(); melden("Posten angelegt"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
@@ -1534,12 +1673,15 @@ document.addEventListener("click", async (ev) => {
     return;
   }
   if(ist("v_satz_speichern")){
-    const v = komma(el("v_satz").value);
-    if(!(v>0)) return melden("Bitte einen Stundensatz eintragen");
+    const v = komma(el("v_satz").value), k = komma(el("v_kosten").value);
+    if(!(v>0)) return melden("Bitte einen Verrechnungssatz eintragen");
+    if(!(k>0)) return melden("Bitte einen Kostensatz eintragen");
+    if(k>v) return melden("Der Kostensatz sollte unter dem Verrechnungssatz liegen");
     try{
       await sb("einstellungen?on_conflict=schluessel", {method:"POST",
-        body:{schluessel:"stundensatz", wert:String(v)}, prefer:"resolution=merge-duplicates,return=minimal"});
-      S.einst.stundensatz=String(v); melden("Gespeichert"); zeichnen();
+        body:[{schluessel:"stundensatz", wert:String(v)},{schluessel:"kostensatz", wert:String(k)}],
+        prefer:"resolution=merge-duplicates,return=minimal"});
+      S.einst.stundensatz=String(v); S.einst.kostensatz=String(k); melden("Gespeichert"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
     return;
   }
@@ -1623,6 +1765,19 @@ document.addEventListener("change", async (ev) => {
     t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
   }
   if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
+  if(t.classList && t.classList.contains("pfeld")){
+    const pid=t.dataset.pid, feld=t.dataset.feld;
+    const roh=t.value.trim();
+    const wert = roh==="" ? (feld==="kalkulierte_stunden" ? 0 : null) : komma(roh);
+    if(roh!=="" && !(wert>=0)) return melden("Bitte eine Zahl eintragen");
+    const daten={}; daten[feld]=wert;
+    try{
+      await sb("positionen?id=eq."+encodeURIComponent(pid), {method:"PATCH", body:daten, prefer:"return=minimal"});
+      const x=pos(pid); if(x) x[feld]=wert;
+      melden("Gespeichert"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
   if(t.id==="f_auftrag" && S.form){
     S.form.stunden = viertel(komma(el("f_stunden").value))||S.form.stunden;
     S.form.auftrag_id = t.value;
