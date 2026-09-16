@@ -148,6 +148,14 @@ button.tat small{display:block;color:var(--grau);font-size:12.5px;}
 .auftragkopf .nr{font-size:12.5px;color:var(--grau);white-space:nowrap;}
 .kunde{font-size:13.5px;color:var(--grau);margin:2px 0 0;}
 
+.klappe{display:block;width:100%;text-align:left;margin:16px 0 0;padding:13px 14px;
+  background:var(--karte);border:1px solid var(--linie);border-radius:5px;
+  font-size:15px;font-weight:700;cursor:pointer;position:relative;}
+.klappe::after{content:"+";position:absolute;right:14px;top:11px;font-size:19px;font-weight:400;color:var(--grau);}
+.klappe.offen::after{content:"–";}
+.klappe.offen{border-bottom-left-radius:0;border-bottom-right-radius:0;border-bottom-color:transparent;}
+.klappinhalt{border:1px solid var(--linie);border-top:0;border-radius:0 0 5px 5px;
+  padding:14px;margin-bottom:4px;}
 .kundenkopf{margin:22px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;
   color:var(--grau);border-bottom:1px solid var(--linie);padding-bottom:5px;}
 .kennzahl{display:flex;justify-content:space-between;gap:12px;padding:9px 0;
@@ -230,10 +238,11 @@ const S = {
   tag: heute(),
   form: null,     // offenes Erfassungsformular
   vform: null,    // Formular für einen vorläufigen Auftrag
+  aufgeklappt: {},
   lagerFoto: null,
   wform: null,
   aform: null,    // offenes Auftragsformular
-  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [],
+  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [], kosten: [],
   reiter: "lager",
   einst: {rueckmeldung:"0"},
   online: navigator.onLine
@@ -318,31 +327,33 @@ async function sb(pfad, opt){
 
 async function datenHolen(){
   try{
-    const [a,t,m,z,an,e,lg,wu,po] = await Promise.all([
-      sb("auftraege?select=*&order=status.asc,nummer.desc"),
+    const [a,t,m,z,an,e,lg,wu,po,ko] = await Promise.all([
+      sb("auftraege?select=*&storniert=is.false&order=status.asc,nummer.desc"),
       sb("taetigkeiten?select=*&order=sortierung.asc"),
-      sb("mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,aktiv&aktiv=is.true&order=name.asc"),
+      sb("mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"),
       sb("zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
       sb("anwesenheit?select=*&order=datum.desc&limit=8000"),
       sb("einstellungen?select=*"),
       sb("lager?select=*&order=angelegt_am.desc&limit=500"),
       sb("wuensche?select=*&order=angelegt_am.desc&limit=300"),
-      sb("positionen?select=*&order=sortierung.asc&limit=2000")
+      sb("positionen?select=*&order=sortierung.asc&limit=2000"),
+      sb("kosten?select=*&order=datum.desc&limit=3000")
     ]);
-    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[]; S.positionen=po||[];
+    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[]; S.positionen=po||[]; S.kosten=ko||[];
     S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
     if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
     if(S.einst.stundensatz===undefined) S.einst.stundensatz="60";
     if(S.einst.kostensatz===undefined) S.einst.kostensatz="45";
+    if(S.einst.materialaufschlag===undefined) S.einst.materialaufschlag="15";
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
-             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen};
+             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten};
     sichern("cache",S.cache);
     S.online=true;
   }catch(err){
     S.online=false;
     const c=S.cache||{};
     S.auftraege=c.auftraege||[]; S.taetigkeiten=c.taetigkeiten||[]; S.mitarbeiter=c.mitarbeiter||[];
-    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[]; S.positionen=c.positionen||[];
+    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[]; S.positionen=c.positionen||[]; S.kosten=c.kosten||[];
     if(S.cfg && S.ich) melden("Offline – letzter bekannter Stand");
   }
 }
@@ -423,44 +434,104 @@ function pos(id){ return S.positionen.find(p=>p.id===id); }
 function istStundenPos(pid){ return alleZeiten().reduce((s,z)=> z.position_id===pid ? s+Number(z.stunden||0) : s, 0); }
 // Soll eines Auftrags: Summe der Posten, sonst der Wert am Auftrag selbst
 function sollVon(a){
-  const ps = posten(a.id);
-  if(ps.length) return ps.reduce((s,p)=>s+Number(p.kalkulierte_stunden||0),0);
-  return Number(a.kalkulierte_stunden)||0;
+  // nur Festpreis-Positionen haben ein Sollmaß
+  return posten(a.id).filter(p=>artVon(p)==="festpreis")
+                     .reduce((s,p)=>s+Number(p.kalkulierte_stunden||0),0);
 }
-function satzVerkauf(){ return Number(S.einst.stundensatz)||0; }
-function satzKosten(){ return Number(S.einst.kostensatz)||satzVerkauf(); }
+function satzVerkauf(m){
+  if(m && m.verrechnungssatz!=null && m.verrechnungssatz!=="") return Number(m.verrechnungssatz);
+  return Number(S.einst.stundensatz)||0;
+}
+function satzKosten(m){
+  if(m && m.kostensatz!=null && m.kostensatz!=="") return Number(m.kostensatz);
+  return Number(S.einst.kostensatz)||Number(S.einst.stundensatz)||0;
+}
+function aufschlagVon(x){
+  if(x && x.materialaufschlag!=null && x.materialaufschlag!=="") return Number(x.materialaufschlag);
+  return Number(S.einst.materialaufschlag)||0;
+}
+function artVon(x){ return (x && x.abrechnung) || "festpreis"; }
+function artName(a){ return a==="regie" ? "Nach Aufwand" : (a==="intern" ? "Intern" : "Festpreis"); }
 
-// Ergebnis einer Position: Angebot abzüglich Material und Lohnkosten
+// Kosten (Rechnungen) einer Position bzw. eines Auftrags
+function kostenVon(pid, art){
+  return S.kosten.filter(k=>k.position_id===pid && (!art || k.art===art))
+                 .reduce((s,k)=>s+Number(k.betrag||0),0);
+}
+function kostenAuftrag(aid, art){
+  return S.kosten.filter(k=>k.auftrag_id===aid && (!art || k.art===art))
+                 .reduce((s,k)=>s+Number(k.betrag||0),0);
+}
+
+// Lohn einer Position, je Person mit ihrem Satz
+function lohnPos(pid, welcher){
+  let sum = 0;
+  alleZeiten().forEach(z=>{
+    if(z.position_id!==pid) return;
+    const t = taet(z.taetigkeit_id);
+    if(welcher==="verkauf" && !(t && t.verrechenbar)) return;   // nur berechenbare Zeit
+    const m = person(z.mitarbeiter_id);
+    sum += Number(z.stunden||0) * (welcher==="verkauf" ? satzVerkauf(m) : satzKosten(m));
+  });
+  return sum;
+}
+function verrechenbareStunden(pid){
+  return alleZeiten().reduce((s,z)=>{
+    if(z.position_id!==pid) return s;
+    const t = taet(z.taetigkeit_id);
+    return (t && t.verrechenbar) ? s+Number(z.stunden||0) : s;
+  },0);
+}
+
+// Vollständige Rechnung einer Position
 function ergebnisPos(x){
-  const angebot  = x.angebotssumme!=null ? Number(x.angebotssumme) : null;
-  const material = Number(x.materialkosten||0);
+  const art      = artVon(x);
   const stdIst   = istStundenPos(x.id);
   const stdSoll  = Number(x.kalkulierte_stunden)||0;
-  const lohn     = stdIst*satzKosten();
-  return {angebot, material, stdIst, stdSoll, lohn,
-          kosten: angebot!==null ? material+lohn : null,
-          ergebnis: angebot!==null ? angebot-material-lohn : null,
-          stdAbw: stdIst-stdSoll};
+  const matIst   = kostenVon(x.id, "material");
+  const fremdIst = kostenVon(x.id, "fremd");
+  const lohnKost = lohnPos(x.id, "kosten");
+  const kosten   = matIst + fremdIst + lohnKost;
+
+  let umsatz = null, offen = null;
+  if(art==="festpreis"){
+    umsatz = x.angebotssumme!=null ? Number(x.angebotssumme) : null;
+  }else if(art==="regie"){
+    const lohnV = lohnPos(x.id, "verkauf");
+    const matV  = matIst * (1 + aufschlagVon(x)/100);
+    umsatz = lohnV + matV + fremdIst;
+    offen  = x.obergrenze!=null ? Number(x.obergrenze) : null;
+  }else{
+    umsatz = 0;
+  }
+  return {art, stdIst, stdSoll, stdAbw: stdIst-stdSoll,
+          matIst, matSoll: x.materialkosten!=null?Number(x.materialkosten):null,
+          fremdIst, fremdSoll: x.fremd_kalk!=null?Number(x.fremd_kalk):null,
+          lohnKost, lohnVerkauf: art==="regie"? lohnPos(x.id,"verkauf") : null,
+          stdVerrechenbar: verrechenbareStunden(x.id),
+          kosten, umsatz, grenze: offen,
+          ergebnis: umsatz!==null ? umsatz-kosten : null};
 }
-// Summen über einen Auftrag: Positionen, sonst der Auftrag selbst
+
+// Summen über einen Auftrag
 function ergebnisAuftrag(a){
   const ps = posten(a.id);
-  if(ps.length){
-    let volumen=0, material=0, lohn=0, mitGeld=0;
-    ps.forEach(x=>{
-      const r = ergebnisPos(x);
-      if(r.angebot!==null){ volumen+=r.angebot; mitGeld++; }
-      material += Number(x.materialkosten||0);
-      lohn     += r.lohn;
-    });
-    return {volumen: mitGeld? volumen : null, material, lohn,
-            ergebnis: mitGeld? volumen-material-lohn : null, posten:ps};
-  }
-  const angebot = a.angebotssumme!=null ? Number(a.angebotssumme) : null;
-  const material = Number(a.materialkosten||0);
-  const lohn = istStunden(a.id)*satzKosten();
-  return {volumen: angebot, material, lohn,
-          ergebnis: angebot!==null ? angebot-material-lohn : null, posten:[]};
+  let fest=0, laufend=0, kosten=0, ergebnis=0, hatUmsatz=false;
+  ps.forEach(x=>{
+    const r = ergebnisPos(x);
+    kosten += r.kosten;
+    if(r.umsatz!==null){
+      hatUmsatz = true;
+      if(r.art==="festpreis") fest += r.umsatz; else if(r.art==="regie") laufend += r.umsatz;
+      ergebnis += r.ergebnis;
+    }
+  });
+  // Kosten ohne Positionszuordnung mitzählen
+  const ohnePos = S.kosten.filter(k=>k.auftrag_id===a.id && !k.position_id)
+                          .reduce((s,k)=>s+Number(k.betrag||0),0);
+  kosten += ohnePos; ergebnis -= ohnePos;
+  return {posten:ps, fest, laufend, volumen: hatUmsatz? fest+laufend : null,
+          kosten, ergebnis: hatUmsatz? ergebnis : null};
 }
 function euro(v){
   const n = Math.round(Number(v)||0);
@@ -791,11 +862,18 @@ function auftraegeFuehrung(){
                  .sort((a,b)=>String(b.abgeschlossen_am||"").localeCompare(String(a.abgeschlossen_am||"")));
   let h="";
 
-  const kritisch = offen.filter(a=>sollVon(a)>0 && istStunden(a.id)/sollVon(a)>=0.8);
-  if(kritisch.length){
-    h += '<div class="warnung"><strong>Achtung:</strong> '
-      + kritisch.map(a=>esc((a.kunde||a.nummer))+" ("+zahl(istStunden(a.id)/sollVon(a)*100,0)+" %)").join(", ")
-      + ' haben 80 % der kalkulierten Stunden erreicht.</div>';
+  const warn = [];
+  offen.forEach(a=>{
+    posten(a.id).forEach(x=>{
+      const r = ergebnisPos(x);
+      if(r.art==="festpreis" && r.stdSoll>0 && r.stdIst/r.stdSoll>=0.8)
+        warn.push(esc(a.kunde||a.nummer)+" · "+esc(x.bezeichnung)+" "+zahl(r.stdIst/r.stdSoll*100,0)+" % der Stunden");
+      if(r.art==="regie" && r.grenze>0 && r.umsatz/r.grenze>=0.8)
+        warn.push(esc(a.kunde||a.nummer)+" · "+esc(x.bezeichnung)+" "+zahl(r.umsatz/r.grenze*100,0)+" % der Obergrenze");
+    });
+  });
+  if(warn.length){
+    h += '<div class="warnung"><strong>Achtung:</strong> '+warn.join(" · ")+'</div>';
   }
 
   const nach = S.auftraege.filter(a=>a.nachpflegen);
@@ -878,21 +956,30 @@ function auftraegeWerkstatt(){
 // Volumen, Ergebnis und Abweichung je Position
 function geldHtml(a){
   const g = ergebnisAuftrag(a);
-  const ps = g.posten;
   let h = '';
-  if(ps.length){
+  if(g.posten.length){
     h += '<div style="margin-top:10px">';
-    ps.forEach(x=>{
+    g.posten.forEach(x=>{
       const r = ergebnisPos(x);
-      const st = stand(r.stdIst, r.stdSoll);
-      h += '<div style="padding:8px 0;border-top:1px solid var(--linie)">'
-        + '<div class="kennzahl" style="border:0;padding:0"><span><strong>'+esc(x.bezeichnung)+'</strong></span>'
-        + '<b class="zahl stand" data-s="'+st.s+'">'+zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>';
-      if(r.angebot!==null){
-        h += '<div class="kennzahl" style="border:0;padding:3px 0 0;font-size:13.5px;color:var(--grau)">'
-          + '<span>Angebot '+euro(r.angebot)+' · Kosten '+euro(r.kosten)+'</span>'
-          + '<b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":(r.ergebnis>0?"gruen":"grau"))+'">'
-          + (r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
+      h += '<div style="padding:9px 0;border-top:1px solid var(--linie)">'
+        + '<div class="kennzahl" style="border:0;padding:0">'
+        + '<span><strong>'+esc(x.bezeichnung)+'</strong> <small style="color:var(--grau)">'+artName(r.art)+'</small></span>';
+      if(r.art==="festpreis"){
+        const st = stand(r.stdIst, r.stdSoll);
+        h += '<b class="zahl stand" data-s="'+st.s+'">'+zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>';
+        if(r.umsatz!==null){
+          h += '<div class="kennzahl" style="border:0;padding:3px 0 0;font-size:13.5px;color:var(--grau)">'
+            + '<span>Angebot '+euro(r.umsatz)+' · Kosten '+euro(r.kosten)+'</span>'
+            + '<b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":(r.ergebnis>0?"gruen":"grau"))+'">'
+            + (r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
+        }
+      }else if(r.art==="regie"){
+        h += '<b class="zahl">'+zahl(r.stdVerrechenbar,1)+' h berechenbar</b></div>'
+          + '<div class="kennzahl" style="border:0;padding:3px 0 0;font-size:13.5px;color:var(--grau)">'
+          + '<span>Abzurechnen '+euro(r.umsatz)+' · Kosten '+euro(r.kosten)+'</span>'
+          + '<b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":"gruen")+'">'+(r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
+      }else{
+        h += '<b class="zahl stand" data-s="rot">'+zahl(r.stdIst,1)+' h · '+euro(r.kosten)+'</b></div>';
       }
       h += '</div>';
     });
@@ -900,9 +987,11 @@ function geldHtml(a){
   }
   if(g.volumen!==null){
     h += '<div class="bilanz" style="margin:12px 0 0">'
-      + '<div class="oben"><span>Gesamtvolumen</span><span class="zahl">'+euro(g.volumen)+'</span></div>'
+      + '<div class="oben"><span>Volumen gesamt</span><span class="zahl">'+euro(g.volumen)+'</span></div>'
       + '<div class="oben" style="margin-top:5px;color:var(--grau);font-size:13.5px">'
-      + '<span>Material '+euro(g.material)+' · Lohn '+euro(g.lohn)+'</span></div>'
+      + '<span>fest '+euro(g.fest)+' · nach Aufwand '+euro(g.laufend)+'</span></div>'
+      + '<div class="oben" style="margin-top:3px;color:var(--grau);font-size:13.5px">'
+      + '<span>Kosten '+euro(g.kosten)+'</span></div>'
       + '<div class="rest" data-s="'+(g.ergebnis<0?"zuviel":(g.ergebnis>0?"voll":"offen"))+'">'
       + '<span>Ergebnis</span><span class="zahl">'+(g.ergebnis>0?"+":"")+euro(g.ergebnis)+'</span></div></div>';
   }
@@ -944,68 +1033,157 @@ function rueckmeldungHtml(a){
 function viewAuftragsformular(){
   const f = S.aform;
   const arten = ["Treppe","Innenausbau","Möbel","Fenster/Türen","Reparatur","Kundendienst","Sonstiges"];
+  const auf = S.aufgeklappt || {};
+  const block = (k, titel, inhalt, offenStandard) => {
+    const offen = auf[k]!==undefined ? auf[k] : offenStandard;
+    return '<button class="klappe'+(offen?" offen":"")+'" data-klappe="'+k+'">'+esc(titel)+'</button>'
+         + (offen ? '<div class="klappinhalt">'+inhalt+'</div>' : '');
+  };
+
   let h = '<h2>'+(f.id?"Auftrag bearbeiten":"Neuer Auftrag")+'</h2>';
-  h += '<div class="zeile"><div class="feld"><label for="a_nummer">Nummer</label>'
-     + '<input id="a_nummer" type="text" value="'+esc(f.nummer||"")+'" placeholder="2026-041"></div>'
-     + '<div class="feld"><label for="a_art">Art</label><select id="a_art">'
-     + arten.map(x=>'<option'+(x===f.art?" selected":"")+'>'+x+'</option>').join("")+'</select></div></div>'
-     + '<div class="feld"><label for="a_kunde">Kunde</label><input id="a_kunde" type="text" value="'+esc(f.kunde||"")+'"></div>'
-     + '<div class="feld"><label for="a_bez">Bezeichnung</label><input id="a_bez" type="text" value="'+esc(f.bezeichnung||"")+'" placeholder="Buchentreppe 1. OG"></div>'
-     + '<div class="zeile"><div class="feld"><label for="a_std">Kalkulierte Stunden'
-     + ((f.id && posten(f.id).length)? ' (Summe der Posten zählt)':'')+'</label>'
-     + '<input id="a_std" type="text" inputmode="decimal" value="'+(f.kalkulierte_stunden!=null?zahl(f.kalkulierte_stunden,2):"")+'"></div>'
-     + '<div class="feld"><label for="a_summe">Angebotssumme €'
-     + ((f.id && posten(f.id).length)? ' (Summe der Posten zählt)':'')+'</label>'
-     + '<input id="a_summe" type="text" inputmode="decimal" value="'+(f.angebotssumme!=null?zahl(f.angebotssumme,0):"")+'"></div></div>'
-     + '<div class="feld"><label for="a_mat">Materialkosten €</label>'
-     + '<input id="a_mat" type="text" inputmode="decimal" value="'+(f.materialkosten!=null?zahl(f.materialkosten,0):"")+'"></div>';
 
-  if(!f.id) h += kalkulationshilfe(f.art || arten[0]);
+  // --- Stammdaten ---
+  let stamm = '<div class="feld"><label for="a_kunde">Kunde</label>'
+    + '<input id="a_kunde" type="text" value="'+esc(f.kunde||"")+'" placeholder="z. B. Wunner"></div>'
+    + '<div class="zeile"><div class="feld"><label for="a_nummer">Nummer</label>'
+    + '<input id="a_nummer" type="text" value="'+esc(f.nummer||naechsteNummer())+'"></div>'
+    + '<div class="feld"><label for="a_art">Art</label><select id="a_art">'
+    + arten.map(x=>'<option'+(x===f.art?" selected":"")+'>'+x+'</option>').join("")+'</select></div></div>'
+    + '<div class="feld"><label for="a_bez">Bezeichnung</label>'
+    + '<input id="a_bez" type="text" value="'+esc(f.bezeichnung||"")+'" placeholder="z. B. Umbau Erdgeschoss"></div>'
+    + '<button class="knopf" id="a_speichern">Speichern</button>';
+  h += block("stamm","Stammdaten",stamm,true);
 
-  if(f.id){
-    const ps = posten(f.id);
-    h += '<h2 class="abstand">Posten</h2>'
-      + '<p class="hinweis">Ein Auftrag kann mehrere Posten haben – Treppe, Innentüren, Küche – mit eigener Kalkulation. Sind Posten angelegt, ist das Soll des Auftrags ihre Summe.</p>';
-    if(ps.length){
-      h += ps.map(x=>{
-        const r=ergebnisPos(x), st=stand(r.stdIst,r.stdSoll);
-        return '<div class="karte"><div class="auftragkopf"><strong>'+esc(x.bezeichnung)+'</strong>'
-          + '<button class="minilink" data-posten-loeschen="'+esc(x.id)+'">löschen</button></div>'
-          + '<div class="kennzahl"><span>Gebucht</span><b class="zahl stand" data-s="'+st.s+'">'
-          + zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>'
-          + '<div class="zeile" style="margin-top:8px">'
-          + '<div class="feld"><label for="ps_'+esc(x.id)+'_std">Stunden</label>'
-          + '<input id="ps_'+esc(x.id)+'_std" class="pfeld" data-pid="'+esc(x.id)+'" data-feld="kalkulierte_stunden" type="text" inputmode="decimal" value="'+zahl(x.kalkulierte_stunden,2)+'"></div>'
-          + '<div class="feld"><label for="ps_'+esc(x.id)+'_ang">Angebot €</label>'
-          + '<input id="ps_'+esc(x.id)+'_ang" class="pfeld" data-pid="'+esc(x.id)+'" data-feld="angebotssumme" type="text" inputmode="decimal" value="'+(x.angebotssumme!=null?zahl(x.angebotssumme,0):"")+'"></div>'
-          + '<div class="feld"><label for="ps_'+esc(x.id)+'_mat">Material €</label>'
-          + '<input id="ps_'+esc(x.id)+'_mat" class="pfeld" data-pid="'+esc(x.id)+'" data-feld="materialkosten" type="text" inputmode="decimal" value="'+(x.materialkosten!=null?zahl(x.materialkosten,0):"")+'"></div>'
-          + '</div></div>';
-      }).join("");
-      h += '<p class="hinweis">Änderungen an diesen Feldern werden sofort gespeichert.</p>';
-    }
-    h += '<div class="zeile"><div class="feld"><label for="p_bez">Neuer Posten</label>'
-      + '<input id="p_bez" type="text" placeholder="z. B. Innentüren EG"></div>'
-      + '<div class="feld"><label for="p_std">Stunden</label>'
-      + '<input id="p_std" type="text" inputmode="decimal" placeholder="0,00"></div></div>'
-      + '<div class="zeile"><div class="feld"><label for="p_ang">Angebot €</label>'
-      + '<input id="p_ang" type="text" inputmode="decimal"></div>'
-      + '<div class="feld"><label for="p_mat">Material €</label>'
-      + '<input id="p_mat" type="text" inputmode="decimal"></div></div>'
-      + '<button class="knopf zweit" id="p_hinzu" style="margin-bottom:18px">Posten hinzufügen</button>'
-      + geldHtml(f);
-
-    const ist=istStunden(f.id), soll=sollVon(f);
-    h += '<div class="karte">'+skalaHtml(ist,soll)+'</div>'
-       + '<div class="feld"><label for="a_notiz">Warum ist es so gelaufen?</label>'
-       + '<textarea id="a_notiz" rows="3" placeholder="z. B. zwei Tage Wartezeit auf den Estrich">'+esc(f.abschluss_notiz||"")+'</textarea></div>';
+  if(!f.id){
+    h += '<p class="hinweis">Nach dem Speichern legst du hier die Positionen an.</p>'
+       + '<button class="knopf zweit" id="a_abbrechen">Abbrechen und zurück zum Hauptmenü</button>';
+    return h;
   }
 
-  h += '<button class="knopf" id="a_speichern">Speichern</button>';
-  if(f.id && f.status!=="abgeschlossen") h += '<button class="knopf zweit" id="a_abschliessen">Auftrag abschließen</button>';
-  if(f.id && f.status==="abgeschlossen") h += '<button class="knopf zweit" id="a_oeffnen">Wieder öffnen</button>';
-  h += '<button class="knopf zweit" id="a_abbrechen">Abbrechen</button>';
+  // --- Positionen ---
+  const ps = posten(f.id);
+  let pos_h = '';
+  if(ps.length){
+    pos_h += ps.map(x=>positionsKarte(x)).join("")
+          + '<p class="hinweis">Änderungen werden sofort gespeichert.</p>';
+  }else{
+    pos_h += '<p class="leer">Noch keine Position angelegt.</p>';
+  }
+  pos_h += '<div class="feld"><label for="p_bez">Neue Position</label>'
+    + '<input id="p_bez" type="text" placeholder="z. B. Treppe"></div>'
+    + '<div class="feld"><label for="p_art">Abrechnung</label><select id="p_art">'
+    + '<option value="festpreis">Festpreis – Angebot abgegeben</option>'
+    + '<option value="regie">Nach Aufwand – Stunden und Material</option>'
+    + '<option value="intern">Intern – Gewährleistung, keine Rechnung</option>'
+    + '</select></div>'
+    + '<button class="knopf zweit" id="p_hinzu">Position hinzufügen</button>';
+  h += block("pos","Positionen",pos_h,true);
+
+  // --- Kosten ---
+  const liste = S.kosten.filter(k=>k.auftrag_id===f.id)
+                  .sort((a,b)=>String(b.datum).localeCompare(String(a.datum)));
+  let k_h = '<p class="hinweis">Jede Material- und Fremdrechnung einzeln eintragen. Die Summen ergeben sich daraus.</p>';
+  if(liste.length){
+    k_h += '<div class="zeilen">'+liste.map(k=>{
+      const x = k.position_id? pos(k.position_id) : null;
+      return '<div class="buchung" style="cursor:default">'
+        + '<span class="strich" data-art="'+(k.art==="fremd"?"noetig":"wert")+'"></span>'
+        + '<span class="mitte"><strong>'+esc(k.lieferant||k.text||(k.art==="fremd"?"Fremdleistung":"Material"))+'</strong>'
+        + '<small>'+datumKurz(k.datum)+(x? " · "+esc(x.bezeichnung) : " · ohne Position")
+        + (k.text&&k.lieferant? " · "+esc(k.text) : "")+'</small>'
+        + '<button class="minilink" data-kosten-loeschen="'+esc(k.id)+'">löschen</button></span>'
+        + '<span class="h zahl">'+euro(k.betrag)+'</span></div>';
+    }).join("")+'</div>';
+  }
+  k_h += '<div class="zeile"><div class="feld"><label for="k_art">Art</label>'
+    + '<select id="k_art"><option value="material">Material</option><option value="fremd">Fremdleistung</option></select></div>'
+    + '<div class="feld"><label for="k_datum">Datum</label>'
+    + '<input id="k_datum" type="date" value="'+heute()+'"></div></div>'
+    + '<div class="feld"><label for="k_pos">Position</label><select id="k_pos">'
+    + '<option value="">– ohne Position –</option>'
+    + ps.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.bezeichnung)+'</option>').join("")+'</select></div>'
+    + '<div class="zeile"><div class="feld"><label for="k_lief">Lieferant</label>'
+    + '<input id="k_lief" type="text"></div>'
+    + '<div class="feld"><label for="k_betrag">Betrag €</label>'
+    + '<input id="k_betrag" type="text" inputmode="decimal"></div></div>'
+    + '<button class="knopf zweit" id="k_hinzu">Rechnung eintragen</button>';
+  h += block("kosten","Material und Fremdleistung",k_h,false);
+
+  // --- Abschluss ---
+  let ab_h = geldHtml(f)
+    + '<div class="feld"><label for="a_notiz">Warum ist es so gelaufen?</label>'
+    + '<textarea id="a_notiz" rows="3" placeholder="z. B. zwei Tage Wartezeit auf den Estrich">'+esc(f.abschluss_notiz||"")+'</textarea></div>';
+  if(f.status!=="abgeschlossen") ab_h += '<button class="knopf zweit" id="a_abschliessen">Auftrag abschließen</button>';
+  else ab_h += '<button class="knopf zweit" id="a_oeffnen">Wieder öffnen</button>';
+  const hatStunden = istStunden(f.id) > 0;
+  ab_h += hatStunden
+    ? '<button class="knopf gefahr" id="a_stornieren">Auftrag stornieren</button>'
+      + '<p class="hinweis">Löschen ist nicht möglich, weil bereits Stunden gebucht sind. Stornieren nimmt den Auftrag aus allen Listen, die Historie bleibt erhalten.</p>'
+    : '<button class="knopf gefahr" id="a_loeschen">Auftrag löschen</button>';
+  h += block("abschluss","Abschluss und Ergebnis",ab_h,false);
+
+  h += '<button class="knopf zweit" id="a_abbrechen">Abbrechen und zurück zum Hauptmenü</button>';
   return h;
+}
+
+function naechsteNummer(){
+  const jahr = String(new Date().getFullYear());
+  let max = 0;
+  S.auftraege.forEach(a=>{
+    const m = String(a.nummer||"").match(/^(\d{4})-(\d+)$/);
+    if(m && m[1]===jahr) max = Math.max(max, Number(m[2]));
+  });
+  return jahr+"-"+String(max+1).padStart(3,"0");
+}
+
+function positionsKarte(x){
+  const art = artVon(x), r = ergebnisPos(x);
+  const id = esc(x.id);
+  const fe = (feld,label,wert,breit) =>
+    '<div class="feld"'+(breit?' style="flex:2"':'')+'><label for="ps_'+id+'_'+feld+'">'+label+'</label>'
+    + '<input id="ps_'+id+'_'+feld+'" class="pfeld" data-pid="'+id+'" data-feld="'+feld+'" '
+    + 'type="text" inputmode="decimal" value="'+wert+'"></div>';
+
+  let h = '<div class="karte"><div class="auftragkopf">'
+    + '<strong>'+esc(x.bezeichnung)+'</strong>'
+    + '<button class="minilink" data-posten-loeschen="'+id+'">löschen</button></div>'
+    + '<div class="feld" style="margin:8px 0"><select class="pfeld" data-pid="'+id+'" data-feld="abrechnung">'
+    + ['festpreis','regie','intern'].map(a=>'<option value="'+a+'"'+(a===art?" selected":"")+'>'+artName(a)+'</option>').join("")
+    + '</select></div>';
+
+  if(art==="festpreis"){
+    h += '<div class="zeile">'
+      + fe("kalkulierte_stunden","Stunden kalk.", zahl(x.kalkulierte_stunden,2))
+      + fe("angebotssumme","Angebot €", x.angebotssumme!=null?zahl(x.angebotssumme,0):"")
+      + '</div><div class="zeile">'
+      + fe("materialkosten","Material kalk. €", x.materialkosten!=null?zahl(x.materialkosten,0):"")
+      + fe("fremd_kalk","Fremd kalk. €", x.fremd_kalk!=null?zahl(x.fremd_kalk,0):"")
+      + '</div>';
+    const st = stand(r.stdIst, r.stdSoll);
+    h += '<div class="kennzahl"><span>Stunden</span><b class="zahl stand" data-s="'+st.s+'">'
+      + zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h</b></div>';
+    if(r.matSoll!==null) h += '<div class="kennzahl"><span>Material</span><b class="zahl stand" data-s="'
+      + (r.matIst>r.matSoll?"rot":"gruen")+'">'+euro(r.matIst)+' von '+euro(r.matSoll)+'</b></div>';
+  }else if(art==="regie"){
+    h += '<div class="zeile">'
+      + fe("materialaufschlag","Materialaufschlag %", x.materialaufschlag!=null?zahl(x.materialaufschlag,0):zahl(S.einst.materialaufschlag,0))
+      + fe("obergrenze","Obergrenze € (freiwillig)", x.obergrenze!=null?zahl(x.obergrenze,0):"")
+      + '</div>'
+      + '<div class="kennzahl"><span>Berechenbare Stunden</span><b class="zahl">'+zahl(r.stdVerrechenbar,1)+' von '+zahl(r.stdIst,1)+' h</b></div>'
+      + '<div class="kennzahl"><span>Lohn</span><b class="zahl">'+euro(r.lohnVerkauf)+'</b></div>'
+      + '<div class="kennzahl"><span>Material mit Aufschlag</span><b class="zahl">'+euro(r.matIst*(1+aufschlagVon(x)/100))+'</b></div>'
+      + (r.fremdIst? '<div class="kennzahl"><span>Fremdleistung</span><b class="zahl">'+euro(r.fremdIst)+'</b></div>':'')
+      + '<div class="kennzahl"><span><strong>Abzurechnen</strong></span><b class="zahl">'+euro(r.umsatz)+'</b></div>';
+    if(r.grenze!==null){
+      const p = r.grenze>0 ? r.umsatz/r.grenze : 0;
+      h += '<div class="kennzahl"><span>Obergrenze</span><b class="zahl stand" data-s="'
+        + (p>1?"rot":(p>=0.8?"gelb":"gruen"))+'">'+zahl(p*100,0)+' % von '+euro(r.grenze)+'</b></div>';
+    }
+  }else{
+    h += '<div class="kennzahl"><span>Aufwand ohne Rechnung</span><b class="zahl stand" data-s="rot">'
+      + zahl(r.stdIst,1)+' h · '+euro(r.kosten)+'</b></div>';
+  }
+  return h+'</div>';
 }
 
 function kalkulationshilfe(art){
@@ -1196,6 +1374,20 @@ function viewAuswertung(){
   });
   h += '</div>';
 
+  // Vorschlag für den Verrechnungssatz
+  if(verr>0 && ges>0){
+    const anteil = verr/ges;
+    const basis = satzVerkauf(null);
+    h += '<h2 class="abstand">Deckt euer Verrechnungssatz die Nebenzeiten?</h2>'
+      + '<p class="hinweis">Nicht berechenbare Zeit (Suchen, Wartezeit, Nacharbeit) taucht auf keiner Rechnung auf. Sie muss über den Stundensatz der berechenbaren Stunden mitverdient werden.</p>'
+      + '<div class="karte">'
+      + '<div class="kennzahl"><span>Berechenbarer Anteil</span><b class="zahl">'+zahl(anteil*100,0)+' %</b></div>'
+      + '<div class="kennzahl"><span>Verrechnungssatz heute</span><b class="zahl">'+euro(basis)+'/h</b></div>'
+      + '<div class="kennzahl"><span>Nötig, um alle Stunden zu decken</span>'
+      + '<b class="zahl stand" data-s="'+(basis/anteil>basis*1.05?"gelb":"gruen")+'">'+euro(basis/anteil)+'/h</b></div>'
+      + '</div>';
+  }
+
   // unvollständige Tage
   const luecken=[];
   for(let i=1;i<=14;i++){
@@ -1317,7 +1509,21 @@ function viewVerwaltung(){
   + '<input id="v_satz" type="text" inputmode="decimal" value="'+esc(S.einst.stundensatz||"")+'"></div>'
   + '<div class="feld"><label for="v_kosten">Kostensatz €/h</label>'
   + '<input id="v_kosten" type="text" inputmode="decimal" value="'+esc(S.einst.kostensatz||"")+'"></div></div>'
+  + '<div class="feld"><label for="v_aufschlag">Materialaufschlag bei Regie %</label>'
+  + '<input id="v_aufschlag" type="text" inputmode="decimal" value="'+esc(S.einst.materialaufschlag||"")+'"></div>'
   + '<button class="knopf zweit" id="v_satz_speichern">Sätze speichern</button>'
+
+  + '<h2 class="abstand">Sätze je Person</h2>'
+  + '<p class="hinweis">Leer lassen heißt: es gilt der allgemeine Satz von oben. Bei Regie wird mit dem Verrechnungssatz der Person abgerechnet.</p>'
+  + '<div class="feld"><label for="s_person">Person</label>'
+  + '<select id="s_person">'+S.mitarbeiter.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.name)
+      +' ('+(m.verrechnungssatz!=null?zahl(m.verrechnungssatz,0)+'/':'–/')
+      +(m.kostensatz!=null?zahl(m.kostensatz,0):'–')+')</option>').join("")+'</select></div>'
+  + '<div class="zeile"><div class="feld"><label for="s_verr">Verrechnungssatz €/h</label>'
+  + '<input id="s_verr" type="text" inputmode="decimal"></div>'
+  + '<div class="feld"><label for="s_kost">Kostensatz €/h</label>'
+  + '<input id="s_kost" type="text" inputmode="decimal"></div></div>'
+  + '<button class="knopf zweit" id="s_speichern">Sätze der Person speichern</button>'
 
   + '<h2 class="abstand">Neue Person</h2>'
   + '<div class="feld"><label for="v_name">Name</label><input id="v_name" type="text"></div>'
@@ -1563,16 +1769,60 @@ document.addEventListener("click", async (ev) => {
   const ae = t.closest("[data-auftrag-bearbeiten]");
   if(ae){ S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten)); zeichnen(); return; }
   if(ist("a_abbrechen")){ S.aform=null; zeichnen(); return; }
+  const kl = t.closest("[data-klappe]");
+  if(kl){
+    S.aufgeklappt = S.aufgeklappt || {};
+    const k = kl.dataset.klappe;
+    const standard = (k==="stamm"||k==="pos");
+    S.aufgeklappt[k] = !(S.aufgeklappt[k]!==undefined ? S.aufgeklappt[k] : standard);
+    zeichnen(); return;
+  }
+  if(ist("k_hinzu")){
+    const betrag = komma(el("k_betrag").value);
+    if(!(betrag>0)) return melden("Bitte einen Betrag eintragen");
+    try{
+      await sb("kosten", {method:"POST", prefer:"return=minimal", body:{
+        auftrag_id:S.aform.id, position_id: el("k_pos").value||null,
+        art: el("k_art").value, datum: el("k_datum").value||heute(),
+        lieferant: el("k_lief").value.trim()||null, betrag}});
+      await datenHolen(); melden("Eingetragen"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
+  const kloe = t.closest("[data-kosten-loeschen]");
+  if(kloe){
+    if(!confirm("Rechnung löschen?")) return;
+    try{
+      await sb("kosten?id=eq."+encodeURIComponent(kloe.dataset.kostenLoeschen), {method:"DELETE"});
+      await datenHolen(); melden("Gelöscht"); zeichnen();
+    }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
+  if(ist("a_loeschen")){
+    if(istStunden(S.aform.id)>0) return melden("Es sind Stunden gebucht – bitte stornieren");
+    if(!confirm("Auftrag mit allen Positionen löschen?")) return;
+    try{
+      await sb("auftraege?id=eq."+encodeURIComponent(S.aform.id), {method:"DELETE"});
+      await datenHolen(); S.aform=null; melden("Gelöscht"); zeichnen();
+    }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
+  if(ist("a_stornieren")){
+    if(!confirm("Auftrag stornieren? Er verschwindet aus allen Listen, die gebuchten Stunden bleiben erhalten.")) return;
+    try{
+      await sb("auftraege?id=eq."+encodeURIComponent(S.aform.id),
+        {method:"PATCH", body:{storniert:true, status:"abgeschlossen"}, prefer:"return=minimal"});
+      await datenHolen(); S.aform=null; melden("Storniert"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
   if(ist("p_hinzu")){
     const bez = el("p_bez").value.trim();
-    if(!bez) return melden("Bezeichnung des Postens fehlt");
-    const std = el("p_std").value.trim()!=="" ? komma(el("p_std").value) : 0;
+    if(!bez) return melden("Bezeichnung der Position fehlt");
     try{
       await sb("positionen", {method:"POST", prefer:"return=minimal", body:{
-        auftrag_id:S.aform.id, bezeichnung:bez, kalkulierte_stunden:std,
-        angebotssumme:  el("p_ang").value.trim()!=="" ? komma(el("p_ang").value) : null,
-        materialkosten: el("p_mat").value.trim()!=="" ? komma(el("p_mat").value) : null,
-        sortierung: 100 + posten(S.aform.id).length}});
+        auftrag_id:S.aform.id, bezeichnung:bez, abrechnung: el("p_art").value,
+        kalkulierte_stunden:0, sortierung: 100 + posten(S.aform.id).length}});
       await datenHolen(); melden("Posten angelegt"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
     return;
@@ -1591,13 +1841,12 @@ document.addEventListener("click", async (ev) => {
     const f=S.aform;
     const nummer = el("a_nummer").value.trim();
     if(!nummer) return melden("Die Auftragsnummer fehlt");
+    if(!el("a_kunde").value.trim()) return melden("Der Kunde fehlt");
     const daten = {
       nummer, art: el("a_art").value,
       kunde: el("a_kunde").value.trim()||null,
       bezeichnung: el("a_bez").value.trim()||null,
-      kalkulierte_stunden: komma(el("a_std").value)||0, nachpflegen: false,
-      angebotssumme: el("a_summe").value!=="" ? komma(el("a_summe").value) : null,
-      materialkosten: el("a_mat").value!=="" ? komma(el("a_mat").value) : null
+      nachpflegen: false
     };
     if(f.id){
       daten.abschluss_notiz = el("a_notiz") ? (el("a_notiz").value.trim()||null) : null;
@@ -1605,9 +1854,18 @@ document.addEventListener("click", async (ev) => {
       if(ist("a_oeffnen")){ daten.status="offen"; daten.abgeschlossen_am=null; }
     }
     try{
-      if(f.id) await sb("auftraege?id=eq."+encodeURIComponent(f.id), {method:"PATCH", body:daten, prefer:"return=minimal"});
-      else     await sb("auftraege", {method:"POST", body:daten, prefer:"return=minimal"});
-      await datenHolen(); S.aform=null; S.ansicht="auftraege"; melden("Gespeichert"); zeichnen();
+      if(f.id){
+        await sb("auftraege?id=eq."+encodeURIComponent(f.id), {method:"PATCH", body:daten, prefer:"return=minimal"});
+        await datenHolen(); S.aform=null; S.ansicht="auftraege"; melden("Gespeichert");
+      }else{
+        const neu = await sb("auftraege", {method:"POST", body:daten, prefer:"return=representation"});
+        await datenHolen();
+        const id = neu && neu[0] && neu[0].id;
+        S.aform = id ? Object.assign({}, auftrag(id)) : null;
+        S.aufgeklappt = {stamm:false, pos:true};
+        melden("Angelegt – jetzt die Positionen");
+      }
+      zeichnen();
     }catch(e){ melden("Geht nur online: "+e.message); }
     return;
   }
@@ -1662,6 +1920,21 @@ document.addEventListener("click", async (ev) => {
     }catch(e){ melden("Geht nur online"); }
     return;
   }
+  if(ist("s_speichern")){
+    const mid = el("s_person").value;
+    const daten = {};
+    daten.verrechnungssatz = el("s_verr").value.trim()!=="" ? komma(el("s_verr").value) : null;
+    daten.kostensatz       = el("s_kost").value.trim()!=="" ? komma(el("s_kost").value) : null;
+    if(daten.verrechnungssatz!==null && !(daten.verrechnungssatz>0)) return melden("Verrechnungssatz prüfen");
+    if(daten.kostensatz!==null && !(daten.kostensatz>0)) return melden("Kostensatz prüfen");
+    if(daten.verrechnungssatz!==null && daten.kostensatz!==null && daten.kostensatz>daten.verrechnungssatz)
+      return melden("Der Kostensatz sollte unter dem Verrechnungssatz liegen");
+    try{
+      await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:daten, prefer:"return=minimal"});
+      await datenHolen(); melden("Sätze gespeichert"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
   if(ist("p_speichern")){
     const mid = el("p_person").value, pin = el("p_pin").value.trim();
     if(pin.length<4) return melden("Bitte eine PIN mit mindestens vier Stellen");
@@ -1678,10 +1951,14 @@ document.addEventListener("click", async (ev) => {
     if(!(k>0)) return melden("Bitte einen Kostensatz eintragen");
     if(k>v) return melden("Der Kostensatz sollte unter dem Verrechnungssatz liegen");
     try{
+      const auf = komma(el("v_aufschlag").value)||0;
+      if(!(auf>=0 && auf<=200)) return melden("Materialaufschlag zwischen 0 und 200 Prozent");
       await sb("einstellungen?on_conflict=schluessel", {method:"POST",
-        body:[{schluessel:"stundensatz", wert:String(v)},{schluessel:"kostensatz", wert:String(k)}],
+        body:[{schluessel:"stundensatz", wert:String(v)},{schluessel:"kostensatz", wert:String(k)},
+              {schluessel:"materialaufschlag", wert:String(auf)}],
         prefer:"resolution=merge-duplicates,return=minimal"});
-      S.einst.stundensatz=String(v); S.einst.kostensatz=String(k); melden("Gespeichert"); zeichnen();
+      S.einst.stundensatz=String(v); S.einst.kostensatz=String(k); S.einst.materialaufschlag=String(auf);
+      melden("Gespeichert"); zeichnen();
     }catch(e){ melden("Geht nur online"); }
     return;
   }
@@ -1768,8 +2045,12 @@ document.addEventListener("change", async (ev) => {
   if(t.classList && t.classList.contains("pfeld")){
     const pid=t.dataset.pid, feld=t.dataset.feld;
     const roh=t.value.trim();
-    const wert = roh==="" ? (feld==="kalkulierte_stunden" ? 0 : null) : komma(roh);
-    if(roh!=="" && !(wert>=0)) return melden("Bitte eine Zahl eintragen");
+    let wert;
+    if(feld==="abrechnung"){ wert = roh; }
+    else{
+      wert = roh==="" ? (feld==="kalkulierte_stunden" ? 0 : null) : komma(roh);
+      if(roh!=="" && !(wert>=0)) return melden("Bitte eine Zahl eintragen");
+    }
     const daten={}; daten[feld]=wert;
     try{
       await sb("positionen?id=eq."+encodeURIComponent(pid), {method:"PATCH", body:daten, prefer:"return=minimal"});
