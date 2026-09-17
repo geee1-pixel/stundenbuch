@@ -224,7 +224,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v18";
+const VERSION = "v19";
 
 /* =====================================================================
    1. Zustand
@@ -344,36 +344,61 @@ async function sb(pfad, opt){
 }
 
 async function datenHolen(){
-  try{
-    const [a,t,m,z,an,e,lg,wu,po,ko,ku] = await Promise.all([
-      sb("auftraege?select=*&order=status.asc,nummer.desc"),
-      sb("taetigkeiten?select=*&order=sortierung.asc"),
-      sb("mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"),
-      sb("zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"),
-      sb("anwesenheit?select=*&order=datum.desc&limit=8000"),
-      sb("einstellungen?select=*"),
-      sb("lager?select=*&order=angelegt_am.desc&limit=500"),
-      sb("wuensche?select=*&order=angelegt_am.desc&limit=300"),
-      sb("positionen?select=*&order=sortierung.asc&limit=2000"),
-      sb("kosten?select=*&order=datum.desc&limit=3000"),
-      sb("kunden?select=*&aktiv=is.true&order=name.asc&limit=2000")
-    ]);
-    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[]; S.positionen=po||[]; S.kosten=ko||[]; S.kunden=ku||[];
-    S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
-    if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
-    if(S.einst.stundensatz===undefined) S.einst.stundensatz="60";
-    if(S.einst.kostensatz===undefined) S.einst.kostensatz="45";
-    if(S.einst.materialaufschlag===undefined) S.einst.materialaufschlag="15";
+  const abrufe = [
+    ["auftraege",    "auftraege?select=*&order=status.asc,nummer.desc"],
+    ["taetigkeiten", "taetigkeiten?select=*&order=sortierung.asc"],
+    ["mitarbeiter",  "mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"],
+    ["zeiten",       "zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"],
+    ["anwesenheit",  "anwesenheit?select=*&order=datum.desc&limit=8000"],
+    ["einstellungen","einstellungen?select=*"],
+    ["lager",        "lager?select=*&order=angelegt_am.desc&limit=500"],
+    ["wuensche",     "wuensche?select=*&order=angelegt_am.desc&limit=300"],
+    ["positionen",   "positionen?select=*&order=sortierung.asc&limit=2000"],
+    ["kosten",       "kosten?select=*&order=datum.desc&limit=3000"],
+    ["kunden",       "kunden?select=*&aktiv=is.true&order=name.asc&limit=2000"]
+  ];
+  // Jede Tabelle für sich: ein einzelner Fehler legt nicht alles lahm
+  const ergebnisse = await Promise.allSettled(abrufe.map(x => sb(x[1])));
+  const c = S.cache || {};
+  const kaputt = [];
+  const werte = {};
+  ergebnisse.forEach((r,i)=>{
+    const name = abrufe[i][0];
+    if(r.status==="fulfilled"){ werte[name] = r.value || []; }
+    else { kaputt.push({name, grund: fehlertext(r.reason)}); werte[name] = null; }
+  });
+
+  const nimm = (name, alt) => werte[name]!==null ? werte[name] : (c[alt||name] || []);
+  S.auftraege   = nimm("auftraege");
+  S.taetigkeiten= nimm("taetigkeiten");
+  S.mitarbeiter = nimm("mitarbeiter");
+  S.zeiten      = nimm("zeiten");
+  S.anwesenheit = nimm("anwesenheit");
+  S.lager       = nimm("lager");
+  S.wuensche    = nimm("wuensche");
+  S.positionen  = nimm("positionen");
+  S.kosten      = nimm("kosten");
+  S.kunden      = nimm("kunden");
+  if(werte.einstellungen!==null){
+    S.einst = {};
+    (werte.einstellungen||[]).forEach(x => S.einst[x.schluessel] = x.wert);
+  }else{
+    S.einst = c.einst || {};
+  }
+  if(S.einst.rueckmeldung===undefined)      S.einst.rueckmeldung="0";
+  if(S.einst.stundensatz===undefined)       S.einst.stundensatz="60";
+  if(S.einst.kostensatz===undefined)        S.einst.kostensatz="45";
+  if(S.einst.materialaufschlag===undefined) S.einst.materialaufschlag="15";
+
+  S.fehlende = kaputt;
+  // Ohne Aufträge und Mitarbeiter ist der Stand nicht brauchbar
+  S.online = !kaputt.some(k => k.name==="auftraege" || k.name==="mitarbeiter" || k.name==="positionen");
+
+  if(!kaputt.length){
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
-             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten,kunden:S.kunden};
+             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,
+             wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten,kunden:S.kunden};
     sichern("cache",S.cache);
-    S.online=true;
-  }catch(err){
-    S.online=false;
-    const c=S.cache||{};
-    S.auftraege=c.auftraege||[]; S.taetigkeiten=c.taetigkeiten||[]; S.mitarbeiter=c.mitarbeiter||[];
-    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[]; S.positionen=c.positionen||[]; S.kosten=c.kosten||[]; S.kunden=c.kunden||[];
-    if(S.cfg && S.ich) melden("Offline – letzter bekannter Stand");
   }
 }
 
@@ -667,7 +692,13 @@ function zeichnen(){
   const v = {tag:viewTag, woche:viewWoche, auftraege:viewAuftraege, lager:viewBedarf,
              auswertung:viewAuswertung, verwaltung:viewVerwaltung}[S.ansicht] || viewTag;
   let wartet = S.queue.length ? '<div class="warnung">'+S.queue.length+' Eintrag/Einträge warten auf Übertragung. Sie gehen nicht verloren.</div>' : "";
-  if(!S.online) wartet += '<div class="warnung">Kein Zugriff auf die Datenbank – angezeigt wird der zuletzt geladene Stand. Änderungen an Aufträgen sind jetzt nicht möglich.</div>';
+  if(S.fehlende && S.fehlende.length){
+    const liste = S.fehlende.map(k=>esc(k.name)+" ("+esc(k.grund)+")").join("<br>");
+    wartet += '<div class="warnung"><strong>'
+      + (S.online ? 'Ein Teil der Daten konnte nicht geladen werden:' : 'Kein Zugriff auf die Datenbank – angezeigt wird der zuletzt geladene Stand.')
+      + '</strong><br>'+liste
+      + '<br><br>Fehlt eine Tabelle, muss <em>schema.sql</em> erneut in Supabase ausgeführt werden.</div>';
+  }
   c.innerHTML = wartet + v();
   nachher(); window.scrollTo(0,0);
 }
