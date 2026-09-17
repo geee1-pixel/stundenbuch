@@ -223,6 +223,9 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 <script>
 "use strict";
 
+// Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
+const VERSION = "v14";
+
 /* =====================================================================
    1. Zustand
    ===================================================================== */
@@ -242,7 +245,7 @@ const S = {
   lagerFoto: null,
   wform: null,
   aform: null,    // offenes Auftragsformular
-  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [], kosten: [],
+  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [], kosten: [], kunden: [],
   reiter: "lager",
   einst: {rueckmeldung:"0"},
   online: navigator.onLine
@@ -327,7 +330,7 @@ async function sb(pfad, opt){
 
 async function datenHolen(){
   try{
-    const [a,t,m,z,an,e,lg,wu,po,ko] = await Promise.all([
+    const [a,t,m,z,an,e,lg,wu,po,ko,ku] = await Promise.all([
       sb("auftraege?select=*&order=status.asc,nummer.desc"),
       sb("taetigkeiten?select=*&order=sortierung.asc"),
       sb("mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"),
@@ -337,23 +340,24 @@ async function datenHolen(){
       sb("lager?select=*&order=angelegt_am.desc&limit=500"),
       sb("wuensche?select=*&order=angelegt_am.desc&limit=300"),
       sb("positionen?select=*&order=sortierung.asc&limit=2000"),
-      sb("kosten?select=*&order=datum.desc&limit=3000")
+      sb("kosten?select=*&order=datum.desc&limit=3000"),
+      sb("kunden?select=*&aktiv=is.true&order=name.asc&limit=2000")
     ]);
-    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[]; S.positionen=po||[]; S.kosten=ko||[];
+    S.auftraege=a||[]; S.taetigkeiten=t||[]; S.mitarbeiter=m||[]; S.zeiten=z||[]; S.anwesenheit=an||[]; S.lager=lg||[]; S.wuensche=wu||[]; S.positionen=po||[]; S.kosten=ko||[]; S.kunden=ku||[];
     S.einst = {}; (e||[]).forEach(x => S.einst[x.schluessel] = x.wert);
     if(S.einst.rueckmeldung===undefined) S.einst.rueckmeldung="0";
     if(S.einst.stundensatz===undefined) S.einst.stundensatz="60";
     if(S.einst.kostensatz===undefined) S.einst.kostensatz="45";
     if(S.einst.materialaufschlag===undefined) S.einst.materialaufschlag="15";
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
-             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten};
+             zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten,kunden:S.kunden};
     sichern("cache",S.cache);
     S.online=true;
   }catch(err){
     S.online=false;
     const c=S.cache||{};
     S.auftraege=c.auftraege||[]; S.taetigkeiten=c.taetigkeiten||[]; S.mitarbeiter=c.mitarbeiter||[];
-    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[]; S.positionen=c.positionen||[]; S.kosten=c.kosten||[];
+    S.zeiten=c.zeiten||[]; S.anwesenheit=c.anwesenheit||[]; S.einst=c.einst||{rueckmeldung:"0"}; S.lager=c.lager||[]; S.wuensche=c.wuensche||[]; S.positionen=c.positionen||[]; S.kosten=c.kosten||[]; S.kunden=c.kunden||[];
     if(S.cfg && S.ich) melden("Offline – letzter bekannter Stand");
   }
 }
@@ -540,6 +544,36 @@ function euro(v){
   return vz + String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ".") + " €";
 }
 function person(id){ return S.mitarbeiter.find(m=>m.id===id); }
+function kunde(id){ return S.kunden.find(k=>k.id===id); }
+function kundeName(a){
+  if(!a) return "";
+  const k = a.kunde_id ? kunde(a.kunde_id) : null;
+  return k ? k.name : (a.kunde||"");
+}
+// Kunde nach Namen finden oder neu anlegen
+async function kundeSichern(name){
+  const n = String(name||"").trim();
+  if(!n) return null;
+  const da = S.kunden.find(k=>k.name.toLowerCase()===n.toLowerCase());
+  if(da) return da.id;
+  const neu = await sb("kunden", {method:"POST", prefer:"return=representation", body:{name:n}});
+  await datenHolen();
+  return (neu && neu[0] && neu[0].id) || null;
+}
+// Letzte Buchung auf einen Auftrag – für die Sortierung im Auswahlfeld
+function letzteBuchung(aid){
+  let d = "";
+  alleZeiten().forEach(z=>{ if(z.auftrag_id===aid && String(z.datum)>d) d=String(z.datum); });
+  return d;
+}
+function offeneAuftraegeSortiert(){
+  return S.auftraege.filter(a=>a.status!=="abgeschlossen" && !a.storniert)
+    .slice().sort((a,b)=>{
+      const da=letzteBuchung(a.id), db=letzteBuchung(b.id);
+      if(da!==db) return db.localeCompare(da);
+      return String(kundeName(a)).localeCompare(String(kundeName(b)));
+    });
+}
 
 function alleLager(){
   return S.queue.filter(q=>q.typ==="lager")
@@ -703,7 +737,7 @@ function viewTag(){
       h += '<button class="buchung" data-bearbeiten="'+esc(z.id)+'"'+(z._wartet?' disabled':'')+'>'
          + '<span class="strich" data-art="'+tatArt(t)+'"></span>'
          + '<span class="mitte"><strong>'+esc(t?t.name:"—")+'</strong>'
-         + '<small>'+esc(a? (a.kunde||a.bezeichnung||a.nummer)+(z.position_id&&pos(z.position_id)? " · "+pos(z.position_id).bezeichnung : "") : "ohne Auftrag")
+         + '<small>'+esc(a? (kundeName(a)||a.bezeichnung||a.nummer)+(z.position_id&&pos(z.position_id)? " · "+pos(z.position_id).bezeichnung : "") : "ohne Auftrag")
          + (z.notiz? " · "+esc(z.notiz):"")+(z._wartet?" · wartet auf Übertragung":"")+'</small>'
          + (z.nachtrag? '<span class="marke">Nachtrag prüfen</span>':'')
          + '</span><span class="h zahl">'+zahl(z.stunden,2)+' h</span></button>';
@@ -724,7 +758,8 @@ function viewTag(){
 /* ---------- Erfassungsformular ---------- */
 function viewFormular(){
   const f = S.form;
-  const waehlbar = aktivA().filter(a=>a.status!=="abgeschlossen" || a.id===f.auftrag_id);
+  const waehlbar = offeneAuftraegeSortiert().concat(
+        S.auftraege.filter(a=>a.id===f.auftrag_id && (a.status==="abgeschlossen"||a.storniert)));
   const andere = S.mitarbeiter.filter(m=>m.id!==S.ich.id);
 
   let h = '<h2>'+(f.id?"Buchung ändern":"Zeit erfassen")
@@ -734,7 +769,7 @@ function viewFormular(){
      + '<select id="f_auftrag">'
      + '<option value="">– ohne Auftrag –</option>'
      + waehlbar.map(a=>'<option value="'+esc(a.id)+'"'+(a.id===f.auftrag_id?" selected":"")+'>'
-         + esc(a.kunde||a.bezeichnung||"")+" · "+esc(a.nummer)+'</option>').join("")
+         + esc(kundeName(a)||a.bezeichnung||"")+" · "+esc(a.nummer)+'</option>').join("")
      + '</select></div>';
 
   const ps = f.auftrag_id ? posten(f.auftrag_id) : [];
@@ -798,7 +833,8 @@ function viewVorlaeufig(){
   return '<h2>Vorläufiger Auftrag</h2>'
   + '<p class="hinweis">Für Arbeiten, die noch keine Auftragsnummer haben. Die Führung ergänzt Nummer, Stunden und Summe später – der Auftrag erscheint dort unter „Nachpflegen".</p>'
   + '<div class="feld"><label for="v_kunde2">Kunde</label>'
-  + '<input id="v_kunde2" type="text" value="'+esc(f.kunde||"")+'" placeholder="z. B. Wunner"></div>'
+  + '<input id="v_kunde2" type="text" list="kundenliste2" autocomplete="off" value="'+esc(f.kunde||"")+'" placeholder="z. B. Wunner">'
+  + '<datalist id="kundenliste2">'+S.kunden.map(k=>'<option value="'+esc(k.name)+'">').join("")+'</datalist></div>'
   + '<div class="feld"><label for="v_bez2">Auftrag</label>'
   + '<input id="v_bez2" type="text" value="'+esc(f.bezeichnung||"")+'" placeholder="z. B. Umbau Erdgeschoss"></div>'
   + '<div class="feld"><label for="v_pos2">Position</label>'
@@ -868,9 +904,9 @@ function auftraegeFuehrung(){
     posten(a.id).forEach(x=>{
       const r = ergebnisPos(x);
       if(r.art==="festpreis" && r.stdSoll>0 && r.stdIst/r.stdSoll>=0.8)
-        warn.push(esc(a.kunde||a.nummer)+" · "+esc(x.bezeichnung)+" "+zahl(r.stdIst/r.stdSoll*100,0)+" % der Stunden");
+        warn.push(esc(kundeName(a)||a.nummer)+" · "+esc(x.bezeichnung)+" "+zahl(r.stdIst/r.stdSoll*100,0)+" % der Stunden");
       if(r.art==="regie" && r.grenze>0 && r.umsatz/r.grenze>=0.8)
-        warn.push(esc(a.kunde||a.nummer)+" · "+esc(x.bezeichnung)+" "+zahl(r.umsatz/r.grenze*100,0)+" % der Obergrenze");
+        warn.push(esc(kundeName(a)||a.nummer)+" · "+esc(x.bezeichnung)+" "+zahl(r.umsatz/r.grenze*100,0)+" % der Obergrenze");
     });
   });
   if(warn.length){
@@ -884,7 +920,7 @@ function auftraegeFuehrung(){
       + '<div class="zeilen" style="margin-bottom:18px">'
       + nach.map(a=>'<button class="buchung" data-auftrag-bearbeiten="'+esc(a.id)+'">'
         + '<span class="strich" data-art="verlust"></span>'
-        + '<span class="mitte"><strong>'+esc(a.kunde||a.bezeichnung||"Vorläufiger Auftrag")+'</strong>'
+        + '<span class="mitte"><strong>'+esc(kundeName(a)||a.bezeichnung||"Vorläufiger Auftrag")+'</strong>'
         + '<small>'+esc(a.nummer)+' · vor Ort angelegt'+(posten(a.id).length? ' · '+posten(a.id).map(x=>x.bezeichnung).join(", ") : '')+'</small></span>'
         + '<span class="h zahl">'+zahl(istStunden(a.id),2)+' h</span></button>').join("")
       + '</div>';
@@ -894,9 +930,9 @@ function auftraegeFuehrung(){
   if(!offen.length){ h += '<p class="leer">Keine offenen Aufträge.</p>'; }
   else{
     const kunden = [];
-    offen.forEach(a=>{ const k=a.kunde||"ohne Kunde"; if(kunden.indexOf(k)<0) kunden.push(k); });
+    offen.forEach(a=>{ const k=kundeName(a)||"ohne Kunde"; if(kunden.indexOf(k)<0) kunden.push(k); });
     kunden.forEach(k=>{
-      const liste = offen.filter(a=>(a.kunde||"ohne Kunde")===k);
+      const liste = offen.filter(a=>(kundeName(a)||"ohne Kunde")===k);
       h += '<h2 class="kundenkopf">'+esc(k)+'</h2>';
       liste.forEach(a=>{
         const ps = posten(a.id);
@@ -923,7 +959,7 @@ function auftraegeWerkstatt(){
   let h = '<h2>Woran du arbeitest</h2>';
   h += meine.length ? meine.map(a=>{
       const ps = posten(a.id);
-      let k = '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.kunde||a.bezeichnung||"Auftrag")+'</strong>'
+      let k = '<div class="karte"><div class="auftragkopf"><strong>'+esc(kundeName(a)||a.bezeichnung||"Auftrag")+'</strong>'
         + '<span class="nr">'+esc(a.nummer)+'</span></div>'
         + (a.bezeichnung? '<p class="kunde">'+esc(a.bezeichnung)+(a.art?" · "+esc(a.art):"")+'</p>':"")
         + '<div class="kennzahl" style="border:0;padding:6px 0 0"><span>Deine Stunden</span>'
@@ -938,7 +974,7 @@ function auftraegeWerkstatt(){
 
   if(offen.length){
     h += '<h2 class="abstand">Weitere offene Aufträge</h2><div class="karte">'
-      + offen.map(a=>'<div class="kennzahl"><span>'+esc(a.kunde||a.bezeichnung||"")+' · '+esc(a.nummer)+'</span></div>').join("")
+      + offen.map(a=>'<div class="kennzahl"><span>'+esc(kundeName(a)||a.bezeichnung||"")+' · '+esc(a.nummer)+'</span></div>').join("")
       + '</div>';
   }
 
@@ -1007,9 +1043,9 @@ function rueckmeldungHtml(a){
     proTaet[n] = proTaet[n] || {h:0, art: tatArt(t)};
     proTaet[n].h += Number(z.stunden||0);
   });
-  let h = '<div class="karte"><div class="auftragkopf"><strong>'+esc(a.kunde||a.bezeichnung||"Auftrag")+'</strong>'
+  let h = '<div class="karte"><div class="auftragkopf"><strong>'+esc(kundeName(a)||a.bezeichnung||"Auftrag")+'</strong>'
     + '<span class="nr">'+esc(a.nummer)+(a.abgeschlossen_am? " · "+datumKurz(a.abgeschlossen_am):"")+'</span></div>'
-    + (a.bezeichnung && a.kunde? '<p class="kunde">'+esc(a.bezeichnung)+'</p>':'')
+    + (a.bezeichnung && kundeName(a)? '<p class="kunde">'+esc(a.bezeichnung)+'</p>':'')
     + skalaHtml(ist, soll);
   const ps = posten(a.id);
   if(ps.length && S.ich.rolle!=="fuehrung"){
@@ -1044,8 +1080,10 @@ function viewAuftragsformular(){
   let h = '<h2>'+(f.id?"Auftrag bearbeiten":"Neuer Auftrag")+'</h2>';
 
   // --- Stammdaten ---
+  const kn = f.id ? kundeName(f) : (f.kundeName||"");
   let stamm = '<div class="feld"><label for="a_kunde">Kunde</label>'
-    + '<input id="a_kunde" type="text" value="'+esc(f.kunde||"")+'" placeholder="z. B. Wunner"></div>'
+    + '<input id="a_kunde" type="text" list="kundenliste" autocomplete="off" value="'+esc(kn)+'" placeholder="z. B. Wunner">'
+    + '<datalist id="kundenliste">'+S.kunden.map(k=>'<option value="'+esc(k.name)+'">').join("")+'</datalist></div>'
     + '<div class="zeile"><div class="feld"><label for="a_nummer">Nummer</label>'
     + '<input id="a_nummer" type="text" value="'+esc(f.nummer||naechsteNummer())+'"></div>'
     + '<div class="feld"><label for="a_art">Art</label><select id="a_art">'
@@ -1056,6 +1094,18 @@ function viewAuftragsformular(){
   h += block("stamm","Stammdaten",stamm,true);
 
   if(!f.id){
+    const kd = S.kunden.find(k=>k.name.toLowerCase()===String(f.kundeName||"").trim().toLowerCase());
+    const schon = kd ? S.auftraege.filter(a=>a.kunde_id===kd.id && a.status!=="abgeschlossen" && !a.storniert) : [];
+    if(schon.length){
+      h += '<div class="warnung"><strong>'+esc(kd.name)+'</strong> hat bereits '+schon.length
+        + ' offene(n) Auftrag/Aufträge. Häufig gehört die neue Arbeit als Position dorthin statt in einen zweiten Auftrag.'
+        + '<div class="zeilen" style="margin-top:8px">'
+        + schon.map(a=>'<div class="buchung" style="cursor:default;background:var(--karte)">'
+          + '<span class="mitte"><strong>'+esc(a.bezeichnung||a.nummer)+'</strong>'
+          + '<small>'+esc(a.nummer)+' · '+posten(a.id).length+' Position(en)</small></span>'
+          + '<button class="knopf zweit klein" data-auftrag-bearbeiten="'+esc(a.id)+'">dorthin</button></div>').join("")
+        + '</div></div>';
+    }
     h += '<p class="hinweis">Nach dem Speichern legst du hier die Positionen an.</p>'
        + '<button class="knopf zweit" id="a_abbrechen">Abbrechen und zurück zum Hauptmenü</button>';
     return h;
@@ -1140,6 +1190,7 @@ function naechsteNummer(){
 function positionsKarte(x){
   const art = artVon(x), r = ergebnisPos(x);
   const id = esc(x.id);
+  const ziele = offeneAuftraegeSortiert().filter(a=>a.id!==x.auftrag_id);
   const fe = (feld,label,wert,breit) =>
     '<div class="feld"'+(breit?' style="flex:2"':'')+'><label for="ps_'+id+'_'+feld+'">'+label+'</label>'
     + '<input id="ps_'+id+'_'+feld+'" class="pfeld" data-pid="'+id+'" data-feld="'+feld+'" '
@@ -1194,6 +1245,13 @@ function positionsKarte(x){
     h += '<p class="hinweis" style="margin:0 0 10px">Gewährleistung, Nacharbeit oder eigene Werkstatt. Wird nicht berechnet.</p>'
       + '<div class="kennzahl"><span>Aufwand ohne Rechnung</span><b class="zahl stand" data-s="rot">'
       + zahl(r.stdIst,1)+' h · '+euro(r.kosten)+'</b></div>';
+  }
+  if(ziele.length){
+    h += '<div class="feld" style="margin-top:12px"><label for="mv_'+id+'">Position zu anderem Auftrag verschieben</label>'
+      + '<select id="mv_'+id+'" class="verschieben" data-pid="'+id+'">'
+      + '<option value="">– hier lassen –</option>'
+      + ziele.map(a=>'<option value="'+esc(a.id)+'">'+esc(kundeName(a)||a.bezeichnung||"")+' · '+esc(a.nummer)+'</option>').join("")
+      + '</select></div>';
   }
   return h+'</div>';
 }
@@ -1422,7 +1480,7 @@ function viewAuswertung(){
   const nach = z.filter(x=>x.nachtrag);
   if(nach.length){
     const proA={};
-    nach.forEach(x=>{ const a=auftrag(x.auftrag_id); const k=a?a.nummer+" · "+(a.bezeichnung||a.kunde||""):"ohne Auftrag";
+    nach.forEach(x=>{ const a=auftrag(x.auftrag_id); const k=a?a.nummer+" · "+(a.bezeichnung||kundeName(a)||""):"ohne Auftrag";
       proA[k]=proA[k]||{h:0,n:0}; proA[k].h+=Number(x.stunden||0); proA[k].n++; });
     h += '<h2 class="abstand">Nachträge prüfen</h2><div class="karte">'
       + Object.keys(proA).map(k=>'<div class="kennzahl"><span>'+esc(k)+'</span><b class="zahl">'+zahl(proA[k].h,1)+' h</b></div>').join("")
@@ -1439,7 +1497,7 @@ function viewAuswertung(){
   else mitSoll.forEach(e=>{
     const r=ergebnisPos(e.x), st=stand(r.stdIst,r.stdSoll);
     h += '<div style="padding:10px 0;border-bottom:1px solid var(--linie)">'
-      + '<div class="kennzahl" style="border:0;padding:0"><span>'+esc(e.a.kunde||e.a.nummer)+' · '+esc(e.x.bezeichnung)+'</span>'
+      + '<div class="kennzahl" style="border:0;padding:0"><span>'+esc(kundeName(e.a)||e.a.nummer)+' · '+esc(e.x.bezeichnung)+'</span>'
       + '<b class="zahl stand" data-s="'+st.s+'">'+(r.stdAbw>0?"+":"")+zahl(r.stdAbw,1)+' h</b></div>'
       + '<div class="skalatext"><span class="zahl">Soll '+zahl(r.stdSoll,1)+' h</span><span class="zahl">Ist '+zahl(r.stdIst,1)+' h</span></div></div>';
   });
@@ -1455,7 +1513,7 @@ function viewAuswertung(){
     h += '<h2 class="abstand">Deckungsbeitrag je gebuchter Stunde</h2>'
       + '<p class="hinweis">Umsatz abzüglich Material und Fremdleistung, geteilt durch die gebuchten Stunden. Der Wert muss über eurem Verrechnungssatz liegen.</p><div class="karte">';
     mitGeld.sort((p,q)=>p.db-q.db).forEach(e=>{
-      h += '<div class="kennzahl"><span>'+esc(e.a.kunde||e.a.nummer)+' · '+esc(e.x.bezeichnung)+'</span>'
+      h += '<div class="kennzahl"><span>'+esc(kundeName(e.a)||e.a.nummer)+' · '+esc(e.x.bezeichnung)+'</span>'
         + '<b class="zahl stand" data-s="'+(e.db<satzVerkauf(null)?"rot":"gruen")+'">'+zahl(e.db,2)+' €/h</b></div>';
     });
     h += '</div>';
@@ -1485,16 +1543,21 @@ function viewAuswertung(){
 /* ---------- Verwaltung ---------- */
 function viewVerwaltung(){
   const rueck = S.einst.rueckmeldung==="1";
-  const alle = S.auftraege.slice().sort((a,b)=>String(a.kunde||"").localeCompare(String(b.kunde||"")));
+  const q = String(S.suche||"").trim().toLowerCase();
+  const alle = S.auftraege.filter(a=>{
+      if(!q) return true;
+      return (kundeName(a)+" "+(a.nummer||"")+" "+(a.bezeichnung||"")).toLowerCase().indexOf(q)>=0;
+    }).sort((a,b)=>String(kundeName(a)).localeCompare(String(kundeName(b))));
   return '<h2>Aufträge</h2>'
   + '<button class="knopf" id="auftrag_neu">Neuen Auftrag anlegen</button>'
   + '<p class="hinweis">Alle Aufträge, auch stornierte. Löschen geht nur, solange keine Stunden gebucht sind.</p>'
+  + '<div class="feld"><input id="a_suche" type="search" placeholder="Suchen nach Kunde, Nummer oder Bezeichnung" value="'+esc(S.suche||"")+'"></div>'
   + (alle.length ? '<div class="zeilen">'+alle.map(a=>{
       const std = istStunden(a.id);
       const zustand = a.storniert ? "storniert" : (a.status==="abgeschlossen" ? "abgeschlossen" : "offen");
       return '<div class="buchung" style="cursor:default">'
         + '<span class="strich" data-art="'+(a.storniert?"verlust":(a.status==="abgeschlossen"?"wert":"noetig"))+'"></span>'
-        + '<span class="mitte"><strong>'+esc(a.kunde||a.bezeichnung||"Auftrag")+'</strong>'
+        + '<span class="mitte"><strong>'+esc(kundeName(a)||a.bezeichnung||"Auftrag")+'</strong>'
         + '<small>'+esc(a.nummer)+' · '+zustand+' · '+zahl(std,1)+' h · '+posten(a.id).length+' Pos.</small>'
         + '<span style="display:block;margin-top:6px">'
         + '<button class="minilink" style="color:var(--holz);margin-right:14px" data-auftrag-bearbeiten="'+esc(a.id)+'">bearbeiten</button>'
@@ -1575,7 +1638,8 @@ function viewVerwaltung(){
   + '<div class="trenner"></div>'
   + '<button class="knopf zweit" id="csv">Alle Buchungen als CSV herunterladen</button>'
   + '<button class="knopf zweit" id="neu_laden">Daten neu laden</button>'
-  + '<button class="knopf gefahr" id="verbindung_neu">Verbindung zurücksetzen</button>';
+  + '<button class="knopf gefahr" id="verbindung_neu">Verbindung zurücksetzen</button>'
+  + '<p class="hinweis" style="text-align:center;margin:14px 0 0">Stundenbuch '+VERSION+'</p>';
 }
 
 /* =====================================================================
@@ -1839,7 +1903,7 @@ document.addEventListener("click", async (ev) => {
     const id = alo.dataset.auftragLoeschen;
     if(istStunden(id)>0) return melden("Es sind Stunden gebucht – bitte stornieren");
     const a = auftrag(id);
-    if(!confirm("Auftrag "+((a&&(a.kunde||a.nummer))||"")+" mit allen Positionen löschen?")) return;
+    if(!confirm("Auftrag "+((a&&(kundeName(a)||a.nummer))||"")+" mit allen Positionen löschen?")) return;
     try{
       await sb("auftraege?id=eq."+encodeURIComponent(id), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht"); zeichnen();
@@ -1915,6 +1979,8 @@ document.addEventListener("click", async (ev) => {
       bezeichnung: el("a_bez").value.trim()||null,
       nachpflegen: false
     };
+    daten.kunde_id = await kundeSichern(el("a_kunde").value);
+    daten.kunde = el("a_kunde").value.trim()||null;
     if(f.id){
       daten.abschluss_notiz = el("a_notiz") ? (el("a_notiz").value.trim()||null) : null;
       if(ist("a_abschliessen")){ daten.status="abgeschlossen"; daten.abgeschlossen_am=heute(); }
@@ -2101,6 +2167,18 @@ document.addEventListener("click", async (ev) => {
 });
 
 /* --- Eingabefelder --- */
+document.addEventListener("input", (ev)=>{
+  if(ev.target.id==="a_suche"){
+    S.suche = ev.target.value;
+    clearTimeout(window.__sucheTimer);
+    window.__sucheTimer = setTimeout(()=>{
+      zeichnen();
+      const f = el("a_suche");
+      if(f){ f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+    }, 350);
+  }
+});
+
 document.addEventListener("change", async (ev) => {
   const t = ev.target;
   if(t.id==="anw"){
@@ -2109,6 +2187,27 @@ document.addEventListener("change", async (ev) => {
     t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
   }
   if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
+  if(t.id==="a_kunde" && S.aform && !S.aform.id){
+    S.aform.kundeName = t.value;
+    S.aform.nummer = el("a_nummer").value;
+    S.aform.bezeichnung = el("a_bez").value;
+    zeichnen(); return;
+  }
+  if(t.classList && t.classList.contains("verschieben")){
+    const pid = t.dataset.pid, ziel = t.value;
+    if(!ziel) return;
+    const p = pos(pid);
+    if(!confirm("Position \u201E"+(p?p.bezeichnung:"")+"\u201C mit allen gebuchten Stunden verschieben?")){ t.value=""; return; }
+    try{
+      await sb("positionen?id=eq."+encodeURIComponent(pid), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("zeiten?position_id=eq."+encodeURIComponent(pid), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("kosten?position_id=eq."+encodeURIComponent(pid), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await datenHolen();
+      S.aform = Object.assign({}, auftrag(ziel));
+      melden("Verschoben"); zeichnen();
+    }catch(e){ melden("Geht nur online"); }
+    return;
+  }
   if(t.classList && t.classList.contains("pfeld")){
     const pid=t.dataset.pid, feld=t.dataset.feld;
     const roh=t.value.trim();
@@ -2218,7 +2317,7 @@ function csvExport(){
               "Wertschoepfend","Verrechenbar","Stunden","Nachtrag","Notiz"];
   const zeilen = alleZeiten().slice().sort((a,b)=>String(a.datum).localeCompare(String(b.datum))).map(z=>{
     const m=person(z.mitarbeiter_id), a=auftrag(z.auftrag_id), t=taet(z.taetigkeit_id);
-    return [z.datum, m?m.name:"", a?a.nummer:"", a?(a.kunde||""):"", a?(a.art||""):"",
+    return [z.datum, m?m.name:"", a?a.nummer:"", a?kundeName(a):"", a?(a.art||""):"",
             t?t.name:"", t?(t.wertschoepfend?"ja":"nein"):"", t?(t.verrechenbar?"ja":"nein"):"",
             String(z.stunden).replace(".",","), z.nachtrag?"ja":"nein", z.notiz||""];
   });
