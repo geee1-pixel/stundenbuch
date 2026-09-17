@@ -224,7 +224,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v19";
+const VERSION = "v20";
 
 /* =====================================================================
    1. Zustand
@@ -242,6 +242,7 @@ const S = {
   form: null,     // offenes Erfassungsformular
   vform: null,    // Formular für einen vorläufigen Auftrag
   aufgeklappt: {},
+  ausAuftrag: "",
   lagerFoto: null,
   wform: null,
   aform: null,    // offenes Auftragsformular
@@ -1228,7 +1229,9 @@ function viewAuftragsformular(){
   const hatStunden = istStunden(f.id) > 0;
   ab_h += hatStunden
     ? '<button class="knopf gefahr" id="a_stornieren">Auftrag stornieren</button>'
-      + '<p class="hinweis">Löschen ist nicht möglich, weil bereits Stunden gebucht sind. Stornieren nimmt den Auftrag aus allen Listen, die Historie bleibt erhalten.</p>'
+      + '<button class="knopf gefahr" id="a_hart_loeschen">Endgültig löschen, mit allen Buchungen</button>'
+      + '<p class="hinweis">Stornieren nimmt den Auftrag aus allen Listen, die Historie bleibt erhalten – das ist der normale Weg. Endgültiges Löschen entfernt auch die '
+      + zahl(istStunden(f.id),1)+' gebuchten Stunden und alle Rechnungen. Diese Stunden verschwinden damit aus den Stundenkonten. Nur für Testdaten gedacht.</p>'
     : '<button class="knopf gefahr" id="a_loeschen">Auftrag löschen</button>';
   h += block("abschluss","Abschluss und Ergebnis",ab_h,false);
 
@@ -1474,6 +1477,84 @@ function viewWunschFormular(){
 }
 
 /* ---------- Auswertung ---------- */
+// Stunden nach Tätigkeit für eine beliebige Buchungsmenge
+function nachTaetigkeit(liste){
+  const raus = {}; let ges = 0;
+  liste.forEach(x=>{
+    const t = taet(x.taetigkeit_id), n = t?t.name:"ohne Zuordnung", st = Number(x.stunden||0);
+    raus[n] = raus[n] || {h:0, art:tatArt(t)};
+    raus[n].h += st; ges += st;
+  });
+  return {raus, ges};
+}
+function balkenListe(liste){
+  const r = nachTaetigkeit(liste), raus = r.raus, ges = r.ges;
+  return Object.keys(raus).sort((a,b)=>raus[b].h-raus[a].h).map(n=>{
+    const p = raus[n], anteil = ges? p.h/ges*100 : 0;
+    return '<div style="padding:9px 0"><div class="kennzahl" style="border:0;padding:0">'
+      + '<span>'+esc(n)+'</span><b class="zahl">'+zahl(p.h,1)+' h · '+zahl(anteil,0)+' %</b></div>'
+      + '<div class="balken"><i class="'+p.art+'" style="width:'+anteil.toFixed(1)+'%"></i></div></div>';
+  }).join("");
+}
+
+// Auswertung eines einzelnen Auftrags
+function auswertungAuftrag(a){
+  const zs = alleZeiten().filter(x=>x.auftrag_id===a.id);
+  const ges = summe(zs);
+  let wert=0, verr=0;
+  zs.forEach(x=>{ const t=taet(x.taetigkeit_id); const st=Number(x.stunden||0);
+    if(t&&t.wertschoepfend) wert+=st; if(t&&t.verrechenbar) verr+=st; });
+
+  let h = '<h2>'+esc(kundeName(a)||a.bezeichnung||"Auftrag")+'</h2>'
+    + '<p class="hinweis">'+esc(a.nummer)+(a.bezeichnung? ' · '+esc(a.bezeichnung):'')
+    + (a.status==="abgeschlossen"? ' · abgeschlossen':'')+'</p>';
+
+  if(!zs.length) return h + '<p class="leer">Auf diesen Auftrag ist noch nichts gebucht.</p>';
+
+  h += '<div class="karte">'
+    + '<div class="kennzahl"><span>Gebuchte Stunden</span><b class="zahl">'+zahl(ges,1)+' h</b></div>'
+    + '<div class="kennzahl"><span>Davon am Werkstück</span><b class="zahl">'+zahl(wert,1)+' h · '+zahl(ges?wert/ges*100:0,0)+' %</b></div>'
+    + '<div class="kennzahl"><span>Davon berechenbar</span><b class="zahl">'+zahl(verr,1)+' h · '+zahl(ges?verr/ges*100:0,0)+' %</b></div>'
+    + '<div class="kennzahl"><span>Weder noch</span><b class="zahl">'+zahl(ges-verr,1)+' h · '+zahl(ges?(ges-verr)/ges*100:0,0)+' %</b></div>'
+    + '</div>';
+
+  h += '<h2 class="abstand">Wo die Zeit hinging</h2><div class="karte">'+balkenListe(zs)+'</div>';
+
+  const ps = posten(a.id);
+  if(ps.length){
+    h += '<h2 class="abstand">Je Position</h2>';
+    ps.forEach(x=>{
+      const zp = zs.filter(y=>y.position_id===x.id);
+      const r = ergebnisPos(x);
+      h += '<div class="karte"><div class="auftragkopf"><strong>'+esc(x.bezeichnung)+'</strong>'
+        + '<span class="nr">'+esc(artName(r.art))+'</span></div>';
+      if(r.art==="festpreis"){
+        const st = stand(r.stdIst, r.stdSoll);
+        h += '<div class="kennzahl"><span>Stunden</span><b class="zahl stand" data-s="'+st.s+'">'
+          + zahl(r.stdIst,1)+' von '+zahl(r.stdSoll,1)+' h · '+(r.stdAbw>0?"+":"")+zahl(r.stdAbw,1)+' h</b></div>';
+        if(r.matSoll!==null) h += '<div class="kennzahl"><span>Material</span><b class="zahl stand" data-s="'
+          + (r.matIst>r.matSoll?"rot":"gruen")+'">'+euro(r.matIst)+' von '+euro(r.matSoll)+'</b></div>';
+        if(r.umsatz!==null) h += '<div class="kennzahl"><span>Ergebnis</span>'
+          + '<b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":"gruen")+'">'+(r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
+      }else if(r.art==="regie"){
+        h += '<div class="kennzahl"><span>Berechenbare Stunden</span><b class="zahl">'+zahl(r.stdVerrechenbar,1)+' von '+zahl(r.stdIst,1)+' h</b></div>'
+          + '<div class="kennzahl"><span>Abzurechnen</span><b class="zahl">'+euro(r.umsatz)+'</b></div>'
+          + '<div class="kennzahl"><span>Ergebnis</span><b class="zahl stand" data-s="'+(r.ergebnis<0?"rot":"gruen")+'">'
+          + (r.ergebnis>0?"+":"")+euro(r.ergebnis)+'</b></div>';
+      }else{
+        h += '<div class="kennzahl"><span>Aufwand ohne Rechnung</span><b class="zahl stand" data-s="rot">'
+          + zahl(r.stdIst,1)+' h · '+euro(r.kosten)+'</b></div>';
+      }
+      if(zp.length) h += '<div style="margin-top:6px">'+balkenListe(zp)+'</div>';
+      h += '</div>';
+    });
+  }
+
+  h += '<h2 class="abstand">Geld</h2><div class="karte">'+geldHtml(a)+'</div>';
+  if(a.abschluss_notiz) h += '<p class="hinweis">'+esc(a.abschluss_notiz)+'</p>';
+  return h;
+}
+
 function viewAuswertung(){
   const z = alleZeiten();
   if(!z.length) return '<h2>Auswertung</h2><p class="leer">Noch keine Buchungen vorhanden.</p>';
@@ -1489,7 +1570,22 @@ function viewAuswertung(){
     proTaet[n].h+=st;
   });
 
-  let h = '<h2>Wo geht die Zeit hin?</h2>'
+  const mitBuchung = S.auftraege.filter(a=>istStunden(a.id)>0)
+        .slice().sort((a,b)=>String(kundeName(a)).localeCompare(String(kundeName(b))));
+  const wahl = '<div class="feld"><label for="aus_auftrag">Auswertung für</label>'
+    + '<select id="aus_auftrag">'
+    + '<option value="">Alle Aufträge zusammen</option>'
+    + mitBuchung.map(a=>'<option value="'+esc(a.id)+'"'+(a.id===S.ausAuftrag?" selected":"")+'>'
+        + esc(kundeName(a)||a.bezeichnung||"")+' · '+esc(a.nummer)+'</option>').join("")
+    + '</select></div>';
+
+  if(S.ausAuftrag){
+    const ausA = auftrag(S.ausAuftrag);
+    if(ausA) return wahl + auswertungAuftrag(ausA);
+    S.ausAuftrag = "";
+  }
+
+  let h = wahl + '<h2>Wo geht die Zeit hin?</h2>'
     + '<p class="hinweis">Alle Buchungen des letzten Jahres, gegliedert nach Tätigkeit und Auftrag – nicht nach Personen.</p>'
     + '<div class="karte">'
     + '<div class="kennzahl"><span>Zugeordnete Stunden</span><b class="zahl">'+zahl(ges,1)+' h</b></div>'
@@ -1497,14 +1593,7 @@ function viewAuswertung(){
     + '<div class="kennzahl"><span>Davon berechenbar</span><b class="zahl">'+zahl(verr,1)+' h · '+zahl(ges?verr/ges*100:0,0)+' %</b></div>'
     + '<div class="kennzahl"><span>Weder noch</span><b class="zahl">'+zahl(ges-verr,1)+' h · '+zahl(ges?(ges-verr)/ges*100:0,0)+' %</b></div></div>';
 
-  h += '<h2 class="abstand">Nach Tätigkeit</h2><div class="karte">';
-  Object.keys(proTaet).sort((a,b)=>proTaet[b].h-proTaet[a].h).forEach(n=>{
-    const p=proTaet[n], anteil=ges?p.h/ges*100:0;
-    h += '<div style="padding:9px 0"><div class="kennzahl" style="border:0;padding:0">'
-      + '<span>'+esc(n)+'</span><b class="zahl">'+zahl(p.h,1)+' h · '+zahl(anteil,0)+' %</b></div>'
-      + '<div class="balken"><i class="'+p.art+'" style="width:'+anteil.toFixed(1)+'%"></i></div></div>';
-  });
-  h += '</div>';
+  h += '<h2 class="abstand">Nach Tätigkeit</h2><div class="karte">'+balkenListe(z)+'</div>';
 
   // Vorschlag für den Verrechnungssatz
   if(verr>0 && ges>0){
@@ -1632,6 +1721,7 @@ function viewVerwaltung(){
             : (std>0
                 ? '<button class="minilink" data-auftrag-stornieren="'+esc(a.id)+'">stornieren</button>'
                 : '<button class="minilink" data-auftrag-loeschen="'+esc(a.id)+'">löschen</button>'))
+        + (a.storniert || std===0 ? '' : ' <button class="minilink" data-auftrag-hart="'+esc(a.id)+'">endgültig löschen</button>')
         + '</span></span></div>';
     }).join("")+'</div>'
     + '<div class="karte"><strong style="font-size:14.5px">Ausgewählte zusammenführen</strong>'
@@ -1711,7 +1801,8 @@ function viewVerwaltung(){
   + '<button class="knopf zweit" id="v_taet_speichern">Tätigkeit anlegen</button>'
 
   + '<div class="trenner"></div>'
-  + '<button class="knopf zweit" id="csv">Alle Buchungen als CSV herunterladen</button>'
+  + '<button class="knopf zweit" id="excel">Excel-Auswertung mit Reitern herunterladen</button>'
+  + '<button class="knopf zweit" id="csv">Nur Buchungen als CSV</button>'
   + '<button class="knopf zweit" id="neu_laden">Daten neu laden</button>'
   + '<button class="knopf gefahr" id="verbindung_neu">Verbindung zurücksetzen</button>'
   + '<p class="hinweis" style="text-align:center;margin:14px 0 0">Stundenbuch '+VERSION+'</p>';
@@ -1944,6 +2035,13 @@ document.addEventListener("click", async (ev) => {
     S.aufgeklappt = {stamm:false, pos:false, kosten:false, abschluss:true};
     S.ansicht = "auftraege"; zeichnen(); return;
   }
+  const ah = t.closest("[data-auftrag-hart]");
+  if(ah){
+    S.aform = Object.assign({}, auftrag(ah.dataset.auftragHart));
+    S.aufgeklappt = {stamm:false, pos:false, kosten:false, abschluss:true};
+    S.ansicht = "auftraege"; zeichnen();
+    return melden("Unten unter Abschluss: Endgültig löschen");
+  }
   const ae = t.closest("[data-auftrag-bearbeiten]");
   if(ae){
     S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten));
@@ -2044,6 +2142,20 @@ document.addEventListener("click", async (ev) => {
     S.aform = Object.assign({}, auftrag(ziel));
     S.aufgeklappt = {pos:true};
     melden("Zusammengeführt"); zeichnen();
+    return;
+  }
+  if(ist("a_hart_loeschen")){
+    const f = S.aform, std = istStunden(f.id);
+    if(!confirm("Auftrag \u201E"+(kundeName(f)||f.nummer)+"\u201C endgültig löschen?\n\n"
+      + zahl(std,1)+" gebuchte Stunden und alle Rechnungen werden mitgelöscht.\nDie Stunden verschwinden aus den Stundenkonten.")) return;
+    if(!confirm("Wirklich? Das lässt sich nicht rückgängig machen.")) return;
+    try{
+      await sb("zeiten?auftrag_id=eq."+encodeURIComponent(f.id), {method:"DELETE"});
+      await sb("kosten?auftrag_id=eq."+encodeURIComponent(f.id), {method:"DELETE"});
+      await sb("auftraege?id=eq."+encodeURIComponent(f.id), {method:"DELETE"});
+      await datenHolen(); S.aform=null; S.ansicht="verwaltung";
+      melden("Endgültig gelöscht"); zeichnen();
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("a_stornieren")){
@@ -2275,6 +2387,7 @@ document.addEventListener("click", async (ev) => {
     melden(S.online? "Aktualisiert – "+S.auftraege.length+" Aufträge" : "Offline – alter Stand");
     zeichnen(); return;
   }
+  if(ist("excel")){ melden("Wird erstellt …"); await excelExport(); return; }
   if(ist("csv")){ csvExport(); return; }
 });
 
@@ -2298,6 +2411,7 @@ document.addEventListener("change", async (ev) => {
     if(!(v>=0) || v>24){ t.value=""; return melden("Bitte einen Wert zwischen 0 und 24 eintragen"); }
     t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
   }
+  if(t.id==="aus_auftrag"){ S.ausAuftrag = t.value; zeichnen(); return; }
   if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
   if(t.id==="a_kunde" && S.aform && !S.aform.id){
     S.aform.kundeName = t.value;
@@ -2472,17 +2586,150 @@ function uhrTicken(){
   anzeigen(); uhrInterval=setInterval(anzeigen,1000);
 }
 
-/* ---------- CSV ---------- */
-function csvExport(){
-  const kopf=["Datum","Mitarbeiter","Auftragsnummer","Kunde","Auftragsart","Taetigkeit",
-              "Wertschoepfend","Verrechenbar","Stunden","Nachtrag","Notiz"];
-  const zeilen = alleZeiten().slice().sort((a,b)=>String(a.datum).localeCompare(String(b.datum))).map(z=>{
-    const m=person(z.mitarbeiter_id), a=auftrag(z.auftrag_id), t=taet(z.taetigkeit_id);
-    return [z.datum, m?m.name:"", a?a.nummer:"", a?kundeName(a):"", a?(a.art||""):"",
-            t?t.name:"", t?(t.wertschoepfend?"ja":"nein"):"", t?(t.verrechenbar?"ja":"nein"):"",
-            String(z.stunden).replace(".",","), z.nachtrag?"ja":"nein", z.notiz||""];
+/* ---------- Export ---------- */
+// Tabellenblatt-Namen: Excel erlaubt 31 Zeichen und kein : \ / ? * [ ]
+function blattName(t, benutzt){
+  let n = String(t||"Blatt").replace(/[:\\\/?*\[\]]/g," ").trim().slice(0,28) || "Blatt";
+  let k = n, i = 2;
+  while(benutzt.indexOf(k)>=0){ k = n.slice(0,26)+" "+(i++); }
+  benutzt.push(k);
+  return k;
+}
+
+// SheetJS wird nur beim Export geladen; ohne Netz fällt der Export auf CSV zurück
+function xlsxLaden(){
+  if(window.XLSX) return Promise.resolve(window.XLSX);
+  return new Promise((ok,fehler)=>{
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    sc.onload = ()=> window.XLSX ? ok(window.XLSX) : fehler(new Error("nicht geladen"));
+    sc.onerror = ()=> fehler(new Error("nicht geladen"));
+    document.head.appendChild(sc);
   });
-  const csv=[kopf].concat(zeilen).map(r=>r.map(f=>'"'+String(f==null?"":f).replace(/"/g,'""')+'"').join(";")).join("\r\n");
+}
+
+function buchungsZeilen(liste){
+  return liste.slice().sort((a,b)=>String(a.datum).localeCompare(String(b.datum))).map(z=>{
+    const m=person(z.mitarbeiter_id), a=auftrag(z.auftrag_id), t=taet(z.taetigkeit_id), x=z.position_id?pos(z.position_id):null;
+    return {Datum:z.datum, Mitarbeiter:m?m.name:"", Kunde:a?kundeName(a):"", Auftrag:a?a.nummer:"",
+            Position:x?x.bezeichnung:"", Taetigkeit:t?t.name:"",
+            Wertschoepfend:t?(t.wertschoepfend?"ja":"nein"):"", Berechenbar:t?(t.verrechenbar?"ja":"nein"):"",
+            Stunden:Number(z.stunden)||0, Nachtrag:z.nachtrag?"ja":"nein", Notiz:z.notiz||""};
+  });
+}
+
+async function excelExport(){
+  let XLSX;
+  try{ XLSX = await xlsxLaden(); }
+  catch(e){ melden("Excel-Baustein nicht erreichbar – als CSV gespeichert"); return csvExport(); }
+
+  const alle = alleZeiten();
+  const wb = XLSX.utils.book_new();
+  const namen = [];
+
+  // 1. Übersicht
+  const ges = summe(alle);
+  let wert=0, verr=0;
+  alle.forEach(x=>{ const t=taet(x.taetigkeit_id); const st=Number(x.stunden||0);
+    if(t&&t.wertschoepfend) wert+=st; if(t&&t.verrechenbar) verr+=st; });
+  const uebersicht = [
+    {Kennzahl:"Stand", Wert:datumLang(heute())},
+    {Kennzahl:"Gebuchte Stunden", Wert:ges},
+    {Kennzahl:"Davon am Werkstück", Wert:wert},
+    {Kennzahl:"Davon berechenbar", Wert:verr},
+    {Kennzahl:"Weder noch", Wert:ges-verr},
+    {Kennzahl:"Verrechnungssatz €/h", Wert:satzVerkauf(null)},
+    {Kennzahl:"Kostensatz €/h", Wert:satzKosten(null)}
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(uebersicht), blattName("Übersicht", namen));
+
+  // 2. Aufträge
+  const auftragsZeilen = S.auftraege.map(a=>{
+    const g = ergebnisAuftrag(a);
+    return {Kunde:kundeName(a), Nummer:a.nummer, Bezeichnung:a.bezeichnung||"", Art:a.art||"",
+            Status:a.storniert?"storniert":a.status,
+            Soll_Stunden:sollVon(a), Ist_Stunden:istStunden(a.id),
+            Volumen:g.volumen!=null?g.volumen:"", Festpreis:g.fest, Nach_Aufwand:g.laufend,
+            Kosten:g.kosten, Ergebnis:g.ergebnis!=null?g.ergebnis:""};
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(auftragsZeilen), blattName("Aufträge", namen));
+
+  // 3. Nach Tätigkeit
+  const nt = nachTaetigkeit(alle);
+  const taetZeilen = Object.keys(nt.raus).sort((a,b)=>nt.raus[b].h-nt.raus[a].h).map(n=>({
+    Taetigkeit:n, Stunden:nt.raus[n].h, Anteil_Prozent: nt.ges? Math.round(nt.raus[n].h/nt.ges*1000)/10 : 0
+  }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(taetZeilen), blattName("Nach Tätigkeit", namen));
+
+  // 4. Stundenkonten
+  const kontoZeilen = S.mitarbeiter.map(m=>{
+    const k = stundenkonto(m.id);
+    return {Mitarbeiter:m.name, Erfasste_Tage:k.tage, Anwesend:k.ist, Soll:k.soll, Saldo:k.saldo};
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kontoZeilen), blattName("Stundenkonten", namen));
+
+  // 5. Alle Buchungen
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(buchungsZeilen(alle)), blattName("Buchungen", namen));
+
+  // 6. Ein Blatt je Auftrag mit Buchungen
+  const mitBuchung = S.auftraege.filter(a=>istStunden(a.id)>0)
+    .slice().sort((a,b)=>istStunden(b.id)-istStunden(a.id)).slice(0,40);
+  mitBuchung.forEach(a=>{
+    const zs = alle.filter(x=>x.auftrag_id===a.id);
+    const g = ergebnisAuftrag(a);
+    const kopf = [
+      ["Kunde", kundeName(a)], ["Auftrag", a.nummer], ["Bezeichnung", a.bezeichnung||""],
+      ["Status", a.storniert?"storniert":a.status],
+      [], ["Soll Stunden", sollVon(a)], ["Ist Stunden", istStunden(a.id)],
+      ["Volumen", g.volumen!=null?g.volumen:""], ["Kosten", g.kosten],
+      ["Ergebnis", g.ergebnis!=null?g.ergebnis:""], []
+    ];
+    const blatt = XLSX.utils.aoa_to_sheet(kopf);
+
+    XLSX.utils.sheet_add_aoa(blatt, [["Positionen"],
+      ["Bezeichnung","Abrechnung","Soll h","Ist h","Abweichung h","Angebot","Material ist","Fremd ist","Kosten","Ergebnis"]], {origin:-1});
+    XLSX.utils.sheet_add_json(blatt, posten(a.id).map(x=>{
+      const r = ergebnisPos(x);
+      return {Bezeichnung:x.bezeichnung, Abrechnung:artName(r.art), Soll_h:r.stdSoll, Ist_h:r.stdIst,
+              Abweichung_h:r.stdAbw, Angebot:r.umsatz!=null?r.umsatz:"", Material_ist:r.matIst,
+              Fremd_ist:r.fremdIst, Kosten:r.kosten, Ergebnis:r.ergebnis!=null?r.ergebnis:""};
+    }), {origin:-1, skipHeader:true});
+
+    XLSX.utils.sheet_add_aoa(blatt, [[], ["Nach Tätigkeit"], ["Tätigkeit","Stunden","Anteil %"]], {origin:-1});
+    const n2 = nachTaetigkeit(zs);
+    XLSX.utils.sheet_add_json(blatt, Object.keys(n2.raus).sort((x,y)=>n2.raus[y].h-n2.raus[x].h).map(n=>({
+      T:n, S:n2.raus[n].h, A: n2.ges? Math.round(n2.raus[n].h/n2.ges*1000)/10 : 0
+    })), {origin:-1, skipHeader:true});
+
+    XLSX.utils.sheet_add_aoa(blatt, [[], ["Buchungen"],
+      ["Datum","Mitarbeiter","Position","Tätigkeit","Stunden","Notiz"]], {origin:-1});
+    XLSX.utils.sheet_add_json(blatt, buchungsZeilen(zs).map(r=>({
+      d:r.Datum, m:r.Mitarbeiter, p:r.Position, t:r.Taetigkeit, s:r.Stunden, n:r.Notiz
+    })), {origin:-1, skipHeader:true});
+
+    const k = S.kosten.filter(x=>x.auftrag_id===a.id);
+    if(k.length){
+      XLSX.utils.sheet_add_aoa(blatt, [[], ["Rechnungen"], ["Datum","Art","Position","Lieferant","Betrag"]], {origin:-1});
+      XLSX.utils.sheet_add_json(blatt, k.map(x=>({
+        d:x.datum, a:x.art==="fremd"?"Fremdleistung":"Material",
+        p:x.position_id&&pos(x.position_id)?pos(x.position_id).bezeichnung:"", l:x.lieferant||"", b:Number(x.betrag)||0
+      })), {origin:-1, skipHeader:true});
+    }
+    XLSX.utils.book_append_sheet(wb, blatt, blattName((kundeName(a)||"Auftrag")+" "+a.nummer, namen));
+  });
+
+  XLSX.writeFile(wb, "stundenbuch_"+heute()+".xlsx");
+  melden(wb.SheetNames.length+" Reiter gespeichert");
+}
+
+/* ---------- CSV als Rückfallebene ---------- */
+function csvExport(){
+  const zeilen = buchungsZeilen(alleZeiten());
+  const kopf = Object.keys(zeilen[0] || {Datum:"",Mitarbeiter:"",Kunde:"",Auftrag:"",Position:"",Taetigkeit:"",Stunden:""});
+  const csv=[kopf].concat(zeilen.map(r=>kopf.map(k=>{
+      const v=r[k]; return typeof v==="number" ? String(v).replace(".",",") : v;
+    })))
+    .map(r=>r.map(f=>'"'+String(f==null?"":f).replace(/"/g,'""')+'"').join(";")).join("\r\n");
   const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a");
   a.href=URL.createObjectURL(blob); a.download="stunden_"+heute()+".csv";
