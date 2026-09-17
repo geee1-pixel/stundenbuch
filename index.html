@@ -224,7 +224,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v14";
+const VERSION = "v15";
 
 /* =====================================================================
    1. Zustand
@@ -1161,7 +1161,19 @@ function viewAuftragsformular(){
   h += block("kosten","Material und Fremdleistung",k_h,false);
 
   // --- Abschluss ---
-  let ab_h = geldHtml(f)
+  const andereA = offeneAuftraegeSortiert().filter(a=>a.id!==f.id);
+  let ab_h = geldHtml(f);
+  if(andereA.length){
+    ab_h += '<h2 class="abstand">Mit anderem Auftrag zusammenführen</h2>'
+      + '<p class="hinweis">Alle Positionen dieses Auftrags wandern samt gebuchten Stunden und Rechnungen in den Zielauftrag. Dieser Auftrag wird danach gelöscht. Nichts geht verloren.</p>'
+      + '<div class="feld"><select id="a_merge">'
+      + '<option value="">– nicht zusammenführen –</option>'
+      + andereA.map(a=>'<option value="'+esc(a.id)+'">'+esc(kundeName(a)||a.bezeichnung||"")+' · '+esc(a.nummer)
+          +' ('+posten(a.id).length+' Pos.)</option>').join("")
+      + '</select></div>'
+      + '<button class="knopf zweit" id="a_merge_los">Zusammenführen</button>';
+  }
+  ab_h += '' 
     + '<div class="feld"><label for="a_notiz">Warum ist es so gelaufen?</label>'
     + '<textarea id="a_notiz" rows="3" placeholder="z. B. zwei Tage Wartezeit auf den Estrich">'+esc(f.abschluss_notiz||"")+'</textarea></div>';
   if(f.status!=="abgeschlossen") ab_h += '<button class="knopf zweit" id="a_abschliessen">Auftrag abschließen</button>';
@@ -1196,9 +1208,12 @@ function positionsKarte(x){
     + '<input id="ps_'+id+'_'+feld+'" class="pfeld" data-pid="'+id+'" data-feld="'+feld+'" '
     + 'type="text" inputmode="decimal" value="'+wert+'"></div>';
 
-  let h = '<div class="karte"><div class="auftragkopf">'
-    + '<strong>'+esc(x.bezeichnung)+'</strong>'
+  let h = '<div class="karte"><div class="auftragkopf" style="margin-bottom:8px">'
+    + '<span style="flex:1"></span>'
     + '<button class="minilink" data-posten-loeschen="'+id+'">löschen</button></div>'
+    + '<div class="feld"><label for="ps_'+id+'_bezeichnung">Bezeichnung</label>'
+    + '<input id="ps_'+id+'_bezeichnung" class="pfeld" data-pid="'+id+'" data-feld="bezeichnung" '
+    + 'type="text" value="'+esc(x.bezeichnung)+'"></div>'
     + '<div class="feld" style="margin:8px 0"><select class="pfeld" data-pid="'+id+'" data-feld="abrechnung">'
     + ['festpreis','regie','intern'].map(a=>'<option value="'+a+'"'+(a===art?" selected":"")+'>'+artName(a)+'</option>').join("")
     + '</select></div>';
@@ -1561,6 +1576,7 @@ function viewVerwaltung(){
         + '<small>'+esc(a.nummer)+' · '+zustand+' · '+zahl(std,1)+' h · '+posten(a.id).length+' Pos.</small>'
         + '<span style="display:block;margin-top:6px">'
         + '<button class="minilink" style="color:var(--holz);margin-right:14px" data-auftrag-bearbeiten="'+esc(a.id)+'">bearbeiten</button>'
+        + (a.storniert ? '' : '<button class="minilink" style="color:var(--holz);margin-right:14px" data-auftrag-merge="'+esc(a.id)+'">zusammenführen</button>')
         + (a.storniert
             ? '<button class="minilink" style="color:var(--gruen)" data-auftrag-aktivieren="'+esc(a.id)+'">wieder aktivieren</button>'
             : (std>0
@@ -1863,6 +1879,12 @@ document.addEventListener("click", async (ev) => {
   if(ist("auftrag_neu")){
     S.aform={id:null, art:"Treppe"}; S.ansicht="auftraege"; zeichnen(); return;
   }
+  const am = t.closest("[data-auftrag-merge]");
+  if(am){
+    S.aform = Object.assign({}, auftrag(am.dataset.auftragMerge));
+    S.aufgeklappt = {stamm:false, pos:false, kosten:false, abschluss:true};
+    S.ansicht = "auftraege"; zeichnen(); return;
+  }
   const ae = t.closest("[data-auftrag-bearbeiten]");
   if(ae){
     S.aform=Object.assign({}, auftrag(ae.dataset.auftragBearbeiten));
@@ -1936,6 +1958,23 @@ document.addEventListener("click", async (ev) => {
       await sb("auftraege?id=eq."+encodeURIComponent(S.aform.id), {method:"DELETE"});
       await datenHolen(); S.aform=null; melden("Gelöscht"); zeichnen();
     }catch(e){ melden("Löschen geht nur online"); }
+    return;
+  }
+  if(ist("a_merge_los")){
+    const ziel = el("a_merge").value;
+    if(!ziel) return melden("Bitte den Zielauftrag wählen");
+    const q = auftrag(ziel), v = S.aform;
+    if(!confirm("Alles von „"+(kundeName(v)||v.nummer)+"“ nach „"+(kundeName(q)||q.nummer)+"“ verschieben und diesen Auftrag löschen?")) return;
+    try{
+      await sb("positionen?auftrag_id=eq."+encodeURIComponent(v.id), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("zeiten?auftrag_id=eq."+encodeURIComponent(v.id),     {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("kosten?auftrag_id=eq."+encodeURIComponent(v.id),     {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("auftraege?id=eq."+encodeURIComponent(v.id), {method:"DELETE"});
+      await datenHolen();
+      S.aform = Object.assign({}, auftrag(ziel));
+      S.aufgeklappt = {pos:true};
+      melden("Zusammengeführt"); zeichnen();
+    }catch(e){ melden("Geht nur online: "+e.message); }
     return;
   }
   if(ist("a_stornieren")){
@@ -2213,6 +2252,10 @@ document.addEventListener("change", async (ev) => {
     const roh=t.value.trim();
     let wert;
     if(feld==="abrechnung"){ wert = roh; }
+    else if(feld==="bezeichnung"){
+      if(!roh) return melden("Die Bezeichnung darf nicht leer sein");
+      wert = roh;
+    }
     else{
       wert = roh==="" ? (feld==="kalkulierte_stunden" ? 0 : null) : komma(roh);
       if(roh!=="" && !(wert>=0)) return melden("Bitte eine Zahl eintragen");
