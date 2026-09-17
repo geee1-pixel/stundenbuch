@@ -224,7 +224,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v17";
+const VERSION = "v18";
 
 /* =====================================================================
    1. Zustand
@@ -666,7 +666,8 @@ function zeichnen(){
 
   const v = {tag:viewTag, woche:viewWoche, auftraege:viewAuftraege, lager:viewBedarf,
              auswertung:viewAuswertung, verwaltung:viewVerwaltung}[S.ansicht] || viewTag;
-  const wartet = S.queue.length ? '<div class="warnung">'+S.queue.length+' Eintrag/Einträge warten auf Übertragung. Sie gehen nicht verloren.</div>' : "";
+  let wartet = S.queue.length ? '<div class="warnung">'+S.queue.length+' Eintrag/Einträge warten auf Übertragung. Sie gehen nicht verloren.</div>' : "";
+  if(!S.online) wartet += '<div class="warnung">Kein Zugriff auf die Datenbank – angezeigt wird der zuletzt geladene Stand. Änderungen an Aufträgen sind jetzt nicht möglich.</div>';
   c.innerHTML = wartet + v();
   nachher(); window.scrollTo(0,0);
 }
@@ -2238,7 +2239,11 @@ document.addEventListener("click", async (ev) => {
     return;
   }
 
-  if(ist("neu_laden")){ await queueSenden(); await datenHolen(); melden(S.online?"Aktualisiert":"Offline"); zeichnen(); return; }
+  if(ist("neu_laden")){
+    await queueSenden(); await datenHolen();
+    melden(S.online? "Aktualisiert – "+S.auftraege.length+" Aufträge" : "Offline – alter Stand");
+    zeichnen(); return;
+  }
   if(ist("csv")){ csvExport(); return; }
 });
 
@@ -2275,13 +2280,23 @@ document.addEventListener("change", async (ev) => {
     const p = pos(pid);
     if(!confirm("Position \u201E"+(p?p.bezeichnung:"")+"\u201C mit allen gebuchten Stunden verschieben?")){ t.value=""; return; }
     try{
+      if(!(await auftragExistiert(ziel))){
+        await standErneuern();
+        return melden("Der Zielauftrag existiert nicht mehr – Liste wurde aktualisiert");
+      }
       await sb("positionen?id=eq."+encodeURIComponent(pid), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
       await sb("zeiten?position_id=eq."+encodeURIComponent(pid), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
       await sb("kosten?position_id=eq."+encodeURIComponent(pid), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
       await datenHolen();
       S.aform = Object.assign({}, auftrag(ziel));
       melden("Verschoben"); zeichnen();
-    }catch(e){ melden(fehlertext(e)); }
+    }catch(e){
+      if(/violates foreign key/i.test(String(e.message))){
+        await standErneuern();
+        return melden("Der Zielauftrag existiert nicht mehr – Liste wurde aktualisiert");
+      }
+      melden(fehlertext(e));
+    }
     return;
   }
   if(t.classList && t.classList.contains("pfeld")){
@@ -2330,10 +2345,26 @@ document.addEventListener("change", async (ev) => {
   }
 });
 
+// Gibt es den Auftrag in der Datenbank noch? Schützt davor, auf einen
+// zwischenzeitlich gelöschten Auftrag zu verschieben.
+async function auftragExistiert(id){
+  const r = await sb("auftraege?select=id&id=eq."+encodeURIComponent(id));
+  return !!(r && r.length);
+}
+// Nach einem Fremdschlüsselfehler stimmt der Stand im Gerät nicht mehr.
+async function standErneuern(){
+  await datenHolen();
+  S.aform = S.aform && S.aform.id ? (auftrag(S.aform.id) ? Object.assign({}, auftrag(S.aform.id)) : null) : S.aform;
+  zeichnen();
+}
+
 // Verschiebt alles von den Quellaufträgen in den Zielauftrag und löscht sie.
 // Gibt die Fehlermeldungen der nicht verschiebbaren Aufträge zurück.
 async function zusammenfuehren(quellen, ziel){
   const fehler = [];
+  try{
+    if(!(await auftragExistiert(ziel))) return ["Der Zielauftrag existiert nicht mehr"];
+  }catch(e){ return [fehlertext(e)]; }
   for(const id of quellen){
     if(id===ziel) continue;
     try{
@@ -2344,7 +2375,7 @@ async function zusammenfuehren(quellen, ziel){
       // nachsehen, ob er wirklich weg ist
       const rest = await sb("auftraege?select=id&id=eq."+encodeURIComponent(id));
       if(rest && rest.length) fehler.push("Auftrag konnte nicht gelöscht werden");
-    }catch(e){ fehler.push(e.message); }
+    }catch(e){ fehler.push(fehlertext(e)); }
   }
   return fehler;
 }
