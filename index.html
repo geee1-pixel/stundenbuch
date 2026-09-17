@@ -224,7 +224,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v16";
+const VERSION = "v17";
 
 /* =====================================================================
    1. Zustand
@@ -282,6 +282,14 @@ async function pruefsumme(id, pin){
 function komma(v){ return Number(String(v==null?"":v).replace(",", ".")); }
 function viertel(v){ return Math.round(Number(v)*4)/4; }
 
+// Zeigt den echten Grund statt eines pauschalen Hinweises.
+function fehlertext(e){
+  const t = String((e && e.message) || e || "");
+  if(!navigator.onLine) return "Keine Verbindung – bitte online versuchen";
+  if(/Failed to fetch|NetworkError|Load failed/i.test(t)) return "Server nicht erreichbar";
+  return t.length>150 ? t.slice(0,150)+"…" : t;
+}
+
 let meldTimer=null;
 function melden(text){
   const alt=document.querySelector(".meldung"); if(alt) alt.remove();
@@ -321,7 +329,14 @@ async function sb(pfad, opt){
   });
   if(!r.ok){
     let t=""; try{ t=await r.text(); }catch(e){}
-    throw new Error("Datenbank meldet "+r.status+(t? ": "+t.slice(0,200):""));
+    const tab = String(pfad).split("?")[0];
+    let hinweis = "";
+    try{
+      const j = JSON.parse(t);
+      hinweis = j.message || j.hint || j.details || "";
+      if(/does not exist/i.test(hinweis)) hinweis = "Tabelle "+tab+" fehlt – schema.sql in Supabase ausführen";
+    }catch(err){ hinweis = t.slice(0,160); }
+    throw new Error(tab+": "+r.status+(hinweis? " – "+hinweis : ""));
   }
   if(r.status===204) return null;
   const txt = await r.text();
@@ -1812,7 +1827,7 @@ document.addEventListener("click", async (ev) => {
       S.form.auftrag_id = aid||""; S.form.position_id = pid;
       S.vform = null;
       melden("Angelegt als "+nr); zeichnen();
-    }catch(e){ melden("Geht nur online: "+e.message); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("pos_neu")){
@@ -1829,7 +1844,7 @@ document.addEventListener("click", async (ev) => {
       await datenHolen();
       S.form.position_id = (np && np[0] && np[0].id) || null;
       melden("Position angelegt"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
 
@@ -1871,7 +1886,7 @@ document.addEventListener("click", async (ev) => {
       try{
         await sb("zeiten?id=eq."+encodeURIComponent(f.id), {method:"PATCH", body:daten, prefer:"return=minimal"});
         await datenHolen(); melden("Geändert");
-      }catch(e){ melden("Änderung geht nur online"); }
+      }catch(e){ melden(fehlertext(e)); }
       S.form=null; zeichnen(); return;
     }
     const wer = [S.ich.id].concat(Array.from(document.querySelectorAll(".mit:checked")).map(x=>x.value));
@@ -1883,7 +1898,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("zeiten?id=eq."+encodeURIComponent(S.form.id), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht");
-    }catch(e){ melden("Löschen geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     S.form=null; zeichnen(); return;
   }
 
@@ -1920,7 +1935,7 @@ document.addEventListener("click", async (ev) => {
         art: el("k_art").value, datum: el("k_datum").value||heute(),
         lieferant: el("k_lief").value.trim()||null, betrag}});
       await datenHolen(); melden("Eingetragen"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const kloe = t.closest("[data-kosten-loeschen]");
@@ -1929,7 +1944,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("kosten?id=eq."+encodeURIComponent(kloe.dataset.kostenLoeschen), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht"); zeichnen();
-    }catch(e){ melden("Löschen geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const alo = t.closest("[data-auftrag-loeschen]");
@@ -1941,7 +1956,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("auftraege?id=eq."+encodeURIComponent(id), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht"); zeichnen();
-    }catch(e){ melden("Löschen geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const ast = t.closest("[data-auftrag-stornieren]");
@@ -1951,7 +1966,7 @@ document.addEventListener("click", async (ev) => {
       await sb("auftraege?id=eq."+encodeURIComponent(ast.dataset.auftragStornieren),
         {method:"PATCH", body:{storniert:true, status:"abgeschlossen"}, prefer:"return=minimal"});
       await datenHolen(); melden("Storniert"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const aak = t.closest("[data-auftrag-aktivieren]");
@@ -1960,7 +1975,7 @@ document.addEventListener("click", async (ev) => {
       await sb("auftraege?id=eq."+encodeURIComponent(aak.dataset.auftragAktivieren),
         {method:"PATCH", body:{storniert:false, status:"offen"}, prefer:"return=minimal"});
       await datenHolen(); melden("Wieder aktiv"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("a_loeschen")){
@@ -1969,7 +1984,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("auftraege?id=eq."+encodeURIComponent(S.aform.id), {method:"DELETE"});
       await datenHolen(); S.aform=null; melden("Gelöscht"); zeichnen();
-    }catch(e){ melden("Löschen geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("merge_los")){
@@ -2005,7 +2020,7 @@ document.addEventListener("click", async (ev) => {
       await sb("auftraege?id=eq."+encodeURIComponent(S.aform.id),
         {method:"PATCH", body:{storniert:true, status:"abgeschlossen"}, prefer:"return=minimal"});
       await datenHolen(); S.aform=null; melden("Storniert"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("p_hinzu")){
@@ -2016,7 +2031,7 @@ document.addEventListener("click", async (ev) => {
         auftrag_id:S.aform.id, bezeichnung:bez, abrechnung: el("p_art").value,
         kalkulierte_stunden:0, sortierung: 100 + posten(S.aform.id).length}});
       await datenHolen(); melden("Posten angelegt"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const pl = t.closest("[data-posten-loeschen]");
@@ -2025,7 +2040,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("positionen?id=eq."+encodeURIComponent(pl.dataset.postenLoeschen), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht"); zeichnen();
-    }catch(e){ melden("Löschen geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
 
@@ -2060,7 +2075,7 @@ document.addEventListener("click", async (ev) => {
         melden("Angelegt – jetzt die Positionen");
       }
       zeichnen();
-    }catch(e){ melden("Geht nur online: "+e.message); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
 
@@ -2071,7 +2086,7 @@ document.addEventListener("click", async (ev) => {
       await sb("einstellungen?on_conflict=schluessel", {method:"POST",
         body:{schluessel:"rueckmeldung", wert:neu}, prefer:"resolution=merge-duplicates,return=minimal"});
       S.einst.rueckmeldung=neu; melden(neu==="1"?"Rückmeldung eingeschaltet":"Rückmeldung ausgeschaltet"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("v_person_speichern")){
@@ -2082,7 +2097,7 @@ document.addEventListener("click", async (ev) => {
       await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:pin,
         wochensoll: komma(el("v_soll").value)||38.5, arbeitstage:5, startsaldo:0}, prefer:"return=minimal"});
       await datenHolen(); melden("Person angelegt"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("v_taet_speichern")){
@@ -2096,7 +2111,7 @@ document.addEventListener("click", async (ev) => {
       await sb("taetigkeiten",{method:"POST", body:{name, wertschoepfend:wert,
         verrechenbar:verr, auftrag_noetig:true, sortierung}, prefer:"return=minimal"});
       await datenHolen(); melden("Tätigkeit angelegt"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("k_speichern")){
@@ -2111,7 +2126,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:daten, prefer:"return=minimal"});
       await datenHolen(); melden("Stundenkonto angepasst"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("s_speichern")){
@@ -2126,7 +2141,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:daten, prefer:"return=minimal"});
       await datenHolen(); melden("Sätze gespeichert"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("p_speichern")){
@@ -2136,7 +2151,7 @@ document.addEventListener("click", async (ev) => {
       await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:{pin}, prefer:"return=minimal"});
       delete S.pinMerk[mid]; sichern("pinMerk", S.pinMerk);
       el("p_pin").value=""; melden("PIN gesetzt");
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(ist("v_satz_speichern")){
@@ -2153,7 +2168,7 @@ document.addEventListener("click", async (ev) => {
         prefer:"resolution=merge-duplicates,return=minimal"});
       S.einst.stundensatz=String(v); S.einst.kostensatz=String(k); S.einst.materialaufschlag=String(auf);
       melden("Gespeichert"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   /* --- Reiter Bedarf --- */
@@ -2179,7 +2194,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("wuensche", {method:"POST", body:b, prefer:"return=minimal"});
       await datenHolen(); S.wform=null; melden("Eingetragen"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const ws = t.closest("[data-wunsch-status]");
@@ -2188,7 +2203,7 @@ document.addEventListener("click", async (ev) => {
       await sb("wuensche?id=eq."+encodeURIComponent(ws.dataset.wunschId),
         {method:"PATCH", body:{status:ws.dataset.wunschStatus}, prefer:"return=minimal"});
       await datenHolen(); melden("Übernommen"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
 
@@ -2210,7 +2225,7 @@ document.addEventListener("click", async (ev) => {
       await sb("lager?id=eq."+encodeURIComponent(ls.dataset.lagerId), {method:"PATCH",
         body:{status:ls.dataset.lagerStatus, geaendert_am:new Date().toISOString()}, prefer:"return=minimal"});
       await datenHolen(); melden(ls.dataset.lagerStatus==="bestellt"?"Als bestellt vermerkt":"Erledigt"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   const ll = t.closest("[data-lager-loeschen]");
@@ -2219,7 +2234,7 @@ document.addEventListener("click", async (ev) => {
     try{
       await sb("lager?id=eq."+encodeURIComponent(ll.dataset.lagerLoeschen), {method:"DELETE"});
       await datenHolen(); melden("Gelöscht"); zeichnen();
-    }catch(e){ melden("Löschen geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
 
@@ -2266,7 +2281,7 @@ document.addEventListener("change", async (ev) => {
       await datenHolen();
       S.aform = Object.assign({}, auftrag(ziel));
       melden("Verschoben"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(t.classList && t.classList.contains("pfeld")){
@@ -2287,7 +2302,7 @@ document.addEventListener("change", async (ev) => {
       await sb("positionen?id=eq."+encodeURIComponent(pid), {method:"PATCH", body:daten, prefer:"return=minimal"});
       const x=pos(pid); if(x) x[feld]=wert;
       melden("Gespeichert"); zeichnen();
-    }catch(e){ melden("Geht nur online"); }
+    }catch(e){ melden(fehlertext(e)); }
     return;
   }
   if(t.id==="f_auftrag" && S.form){
