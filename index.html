@@ -224,7 +224,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v15";
+const VERSION = "v16";
 
 /* =====================================================================
    1. Zustand
@@ -1569,21 +1569,33 @@ function viewVerwaltung(){
   + '<div class="feld"><input id="a_suche" type="search" placeholder="Suchen nach Kunde, Nummer oder Bezeichnung" value="'+esc(S.suche||"")+'"></div>'
   + (alle.length ? '<div class="zeilen">'+alle.map(a=>{
       const std = istStunden(a.id);
+      const ps = posten(a.id);
       const zustand = a.storniert ? "storniert" : (a.status==="abgeschlossen" ? "abgeschlossen" : "offen");
       return '<div class="buchung" style="cursor:default">'
-        + '<span class="strich" data-art="'+(a.storniert?"verlust":(a.status==="abgeschlossen"?"wert":"noetig"))+'"></span>'
+        + (a.storniert ? '<span class="strich" data-art="verlust"></span>'
+            : '<input type="checkbox" class="mergesel" value="'+esc(a.id)+'" style="width:22px;height:22px;flex:none;margin-top:2px" aria-label="auswählen">')
         + '<span class="mitte"><strong>'+esc(kundeName(a)||a.bezeichnung||"Auftrag")+'</strong>'
-        + '<small>'+esc(a.nummer)+' · '+zustand+' · '+zahl(std,1)+' h · '+posten(a.id).length+' Pos.</small>'
+        + '<small>'+esc(a.nummer)+(a.bezeichnung? ' · '+esc(a.bezeichnung):'')
+        + ' · '+zustand+' · '+zahl(std,1)+' h</small>'
+        + '<small>'+(ps.length ? esc(ps.map(x=>x.bezeichnung).join(", ")) : "keine Position")+'</small>'
         + '<span style="display:block;margin-top:6px">'
         + '<button class="minilink" style="color:var(--holz);margin-right:14px" data-auftrag-bearbeiten="'+esc(a.id)+'">bearbeiten</button>'
-        + (a.storniert ? '' : '<button class="minilink" style="color:var(--holz);margin-right:14px" data-auftrag-merge="'+esc(a.id)+'">zusammenführen</button>')
         + (a.storniert
             ? '<button class="minilink" style="color:var(--gruen)" data-auftrag-aktivieren="'+esc(a.id)+'">wieder aktivieren</button>'
             : (std>0
                 ? '<button class="minilink" data-auftrag-stornieren="'+esc(a.id)+'">stornieren</button>'
                 : '<button class="minilink" data-auftrag-loeschen="'+esc(a.id)+'">löschen</button>'))
         + '</span></span></div>';
-    }).join("")+'</div>' : '<p class="leer">Keine Aufträge angelegt.</p>')
+    }).join("")+'</div>'
+    + '<div class="karte"><strong style="font-size:14.5px">Ausgewählte zusammenführen</strong>'
+    + '<p class="hinweis" style="margin:6px 0 10px">Oben mehrere Aufträge anhaken und hier das Ziel wählen. Alle Positionen wandern samt Stunden und Rechnungen dorthin, die leeren Aufträge werden gelöscht.</p>'
+    + '<div class="feld"><select id="merge_ziel">'
+    + '<option value="">– Zielauftrag wählen –</option>'
+    + alle.filter(a=>!a.storniert).map(a=>'<option value="'+esc(a.id)+'">'+esc(kundeName(a)||a.bezeichnung||"")
+        +' · '+esc(a.nummer)+(a.bezeichnung? ' · '+esc(a.bezeichnung):'')+'</option>').join("")
+    + '</select></div>'
+    + '<button class="knopf zweit" id="merge_los">Zusammenführen</button></div>'
+   : '<p class="leer">Keine Aufträge angelegt.</p>')
 
   + '<h2 class="abstand">Rückmeldung an die Belegschaft</h2>'
   + '<p class="hinweis">Ist dies eingeschaltet, sehen Mitarbeiter nach Abschluss eines Auftrags, wie viele Stunden gebraucht wurden und wofür. Während der Auftrag läuft, sehen sie weiterhin nur ihre eigenen Stunden.</p>'
@@ -1960,21 +1972,31 @@ document.addEventListener("click", async (ev) => {
     }catch(e){ melden("Löschen geht nur online"); }
     return;
   }
+  if(ist("merge_los")){
+    const ziel = el("merge_ziel").value;
+    if(!ziel) return melden("Bitte den Zielauftrag wählen");
+    const quellen = Array.from(document.querySelectorAll(".mergesel:checked"))
+                      .map(x=>x.value).filter(id=>id!==ziel);
+    if(!quellen.length) return melden("Bitte oben mindestens einen Auftrag anhaken");
+    const q = auftrag(ziel);
+    if(!confirm(quellen.length+" Auftrag/Aufträge nach \u201E"+(kundeName(q)||q.nummer)+"\u201C verschieben und danach löschen?")) return;
+    const fehler = await zusammenfuehren(quellen, ziel);
+    await datenHolen();
+    if(fehler.length) melden(fehler.length+" konnten nicht verschoben werden");
+    else melden(quellen.length+" Auftrag/Aufträge zusammengeführt");
+    zeichnen(); return;
+  }
   if(ist("a_merge_los")){
     const ziel = el("a_merge").value;
     if(!ziel) return melden("Bitte den Zielauftrag wählen");
     const q = auftrag(ziel), v = S.aform;
     if(!confirm("Alles von „"+(kundeName(v)||v.nummer)+"“ nach „"+(kundeName(q)||q.nummer)+"“ verschieben und diesen Auftrag löschen?")) return;
-    try{
-      await sb("positionen?auftrag_id=eq."+encodeURIComponent(v.id), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
-      await sb("zeiten?auftrag_id=eq."+encodeURIComponent(v.id),     {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
-      await sb("kosten?auftrag_id=eq."+encodeURIComponent(v.id),     {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
-      await sb("auftraege?id=eq."+encodeURIComponent(v.id), {method:"DELETE"});
-      await datenHolen();
-      S.aform = Object.assign({}, auftrag(ziel));
-      S.aufgeklappt = {pos:true};
-      melden("Zusammengeführt"); zeichnen();
-    }catch(e){ melden("Geht nur online: "+e.message); }
+    const fehler = await zusammenfuehren([v.id], ziel);
+    await datenHolen();
+    if(fehler.length){ melden("Nicht möglich: "+fehler[0]); zeichnen(); return; }
+    S.aform = Object.assign({}, auftrag(ziel));
+    S.aufgeklappt = {pos:true};
+    melden("Zusammengeführt"); zeichnen();
     return;
   }
   if(ist("a_stornieren")){
@@ -2292,6 +2314,25 @@ document.addEventListener("change", async (ev) => {
     return;
   }
 });
+
+// Verschiebt alles von den Quellaufträgen in den Zielauftrag und löscht sie.
+// Gibt die Fehlermeldungen der nicht verschiebbaren Aufträge zurück.
+async function zusammenfuehren(quellen, ziel){
+  const fehler = [];
+  for(const id of quellen){
+    if(id===ziel) continue;
+    try{
+      await sb("positionen?auftrag_id=eq."+encodeURIComponent(id), {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("zeiten?auftrag_id=eq."+encodeURIComponent(id),     {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("kosten?auftrag_id=eq."+encodeURIComponent(id),     {method:"PATCH", body:{auftrag_id:ziel}, prefer:"return=minimal"});
+      await sb("auftraege?id=eq."+encodeURIComponent(id), {method:"DELETE"});
+      // nachsehen, ob er wirklich weg ist
+      const rest = await sb("auftraege?select=id&id=eq."+encodeURIComponent(id));
+      if(rest && rest.length) fehler.push("Auftrag konnte nicht gelöscht werden");
+    }catch(e){ fehler.push(e.message); }
+  }
+  return fehler;
+}
 
 /* =====================================================================
    7. Speichervorgänge
