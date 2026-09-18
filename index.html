@@ -19,8 +19,10 @@
 }
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
+html{height:100%;}
 body{background:var(--grund);color:var(--holz);font-family:var(--schrift);
-  font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%;}
+  font-size:16px;line-height:1.45;-webkit-text-size-adjust:100%;
+  min-height:100dvh;display:flex;flex-direction:column;}
 button,input,select,textarea{font-family:inherit;font-size:16px;color:inherit;}
 :focus-visible{outline:3px solid var(--zollstock);outline-offset:2px;}
 .zahl{font-variant-numeric:tabular-nums;}
@@ -35,7 +37,7 @@ img{max-width:100%;}
 .kopf .wer button{background:none;border:0;color:var(--grau);text-decoration:underline;
   padding:0;cursor:pointer;font-size:13px;}
 
-main{padding:var(--rand) var(--rand) 24px;max-width:720px;margin:0 auto;}
+main{padding:var(--rand) var(--rand) 24px;max-width:720px;margin:0 auto;width:100%;flex:1 0 auto;}
 h2{font-size:15px;font-weight:700;margin:0 0 12px;letter-spacing:-.01em;}
 h2.abstand{margin-top:28px;}
 h2 .nebenzahl{float:right;color:var(--grau);font-weight:400;}
@@ -183,7 +185,8 @@ button.tat small{display:block;color:var(--grau);font-size:12.5px;}
   color:var(--holz);border:0;border-radius:5px;font-weight:700;cursor:pointer;}
 
 nav{position:sticky;bottom:0;z-index:20;display:flex;background:var(--karte);
-  border-top:1px solid var(--linie);padding-bottom:env(safe-area-inset-bottom);}
+  border-top:1px solid var(--linie);padding-bottom:env(safe-area-inset-bottom);
+  flex:0 0 auto;margin-top:auto;}
 nav button{flex:1;padding:11px 2px 10px;background:none;border:0;border-top:3px solid transparent;
   font-size:10.5px;font-weight:600;color:var(--grau);cursor:pointer;margin-top:-1px;
   line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;position:relative;}
@@ -224,7 +227,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v20";
+const VERSION = "v21";
 
 /* =====================================================================
    1. Zustand
@@ -243,10 +246,11 @@ const S = {
   vform: null,    // Formular für einen vorläufigen Auftrag
   aufgeklappt: {},
   ausAuftrag: "",
+  notizAuftrag: "",
   lagerFoto: null,
   wform: null,
   aform: null,    // offenes Auftragsformular
-  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [], kosten: [], kunden: [],
+  auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [], kosten: [], kunden: [], notizen: [],
   reiter: "lager",
   einst: {rueckmeldung:"0"},
   online: navigator.onLine
@@ -348,7 +352,7 @@ async function datenHolen(){
   const abrufe = [
     ["auftraege",    "auftraege?select=*&order=status.asc,nummer.desc"],
     ["taetigkeiten", "taetigkeiten?select=*&order=sortierung.asc"],
-    ["mitarbeiter",  "mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"],
+    ["mitarbeiter",  "mitarbeiter?select=id,name,rolle,wochensoll,arbeitstage,sollplan,urlaubstage,startsaldo,verrechnungssatz,kostensatz,aktiv&aktiv=is.true&order=name.asc"],
     ["zeiten",       "zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag&datum=gte."+vorTagen(365)+"&order=datum.desc&limit=6000"],
     ["anwesenheit",  "anwesenheit?select=*&order=datum.desc&limit=8000"],
     ["einstellungen","einstellungen?select=*"],
@@ -356,7 +360,8 @@ async function datenHolen(){
     ["wuensche",     "wuensche?select=*&order=angelegt_am.desc&limit=300"],
     ["positionen",   "positionen?select=*&order=sortierung.asc&limit=2000"],
     ["kosten",       "kosten?select=*&order=datum.desc&limit=3000"],
-    ["kunden",       "kunden?select=*&aktiv=is.true&order=name.asc&limit=2000"]
+    ["kunden",       "kunden?select=*&aktiv=is.true&order=name.asc&limit=2000"],
+    ["notizen",      "notizen?select=*&order=datum.desc&limit=1500"]
   ];
   // Jede Tabelle für sich: ein einzelner Fehler legt nicht alles lahm
   const ergebnisse = await Promise.allSettled(abrufe.map(x => sb(x[1])));
@@ -380,6 +385,7 @@ async function datenHolen(){
   S.positionen  = nimm("positionen");
   S.kosten      = nimm("kosten");
   S.kunden      = nimm("kunden");
+  S.notizen     = nimm("notizen");
   if(werte.einstellungen!==null){
     S.einst = {};
     (werte.einstellungen||[]).forEach(x => S.einst[x.schluessel] = x.wert);
@@ -398,7 +404,7 @@ async function datenHolen(){
   if(!kaputt.length){
     S.cache={auftraege:S.auftraege,taetigkeiten:S.taetigkeiten,mitarbeiter:S.mitarbeiter,
              zeiten:S.zeiten,anwesenheit:S.anwesenheit,einst:S.einst,lager:S.lager,
-             wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten,kunden:S.kunden};
+             wuensche:S.wuensche,positionen:S.positionen,kosten:S.kosten,kunden:S.kunden,notizen:S.notizen};
     sichern("cache",S.cache);
   }
 }
@@ -432,11 +438,16 @@ function alleZeiten(){
 function zeitenVon(mid, datum){ return alleZeiten().filter(z=>z.mitarbeiter_id===mid && z.datum===datum); }
 function istStunden(aid){ return alleZeiten().reduce((s,z)=> z.auftrag_id===aid ? s+Number(z.stunden||0) : s, 0); }
 function meineStunden(aid){ return alleZeiten().reduce((s,z)=> (z.auftrag_id===aid && z.mitarbeiter_id===S.ich.id) ? s+Number(z.stunden||0) : s, 0); }
-function anwesend(mid, datum){
+function anwEintrag(mid, datum){
   const w = S.queue.filter(q=>q.typ==="anw" && q.body.mitarbeiter_id===mid && q.body.datum===datum).pop();
-  if(w) return Number(w.body.stunden);
-  const r = S.anwesenheit.find(x=>x.mitarbeiter_id===mid && x.datum===datum);
-  return r ? Number(r.stunden) : null;
+  if(w) return w.body;
+  return S.anwesenheit.find(x=>x.mitarbeiter_id===mid && x.datum===datum) || null;
+}
+function anwArt(mid, datum){ const r = anwEintrag(mid,datum); return r ? (r.art||"arbeit") : "arbeit"; }
+function anwesend(mid, datum){
+  const r = anwEintrag(mid, datum);
+  if(!r || (r.art && r.art!=="arbeit")) return null;
+  return Number(r.stunden);
 }
 function summe(liste){ return liste.reduce((s,z)=>s+Number(z.stunden||0),0); }
 
@@ -445,30 +456,58 @@ function summe(liste){ return liste.reduce((s,z)=>s+Number(z.stunden||0),0); }
 // zählen weder plus noch minus.
 function anwesenheitsTage(mid){
   const aus = {};
-  S.anwesenheit.filter(a=>a.mitarbeiter_id===mid).forEach(a=>{ aus[a.datum]=Number(a.stunden); });
+  S.anwesenheit.filter(a=>a.mitarbeiter_id===mid).forEach(a=>{ aus[a.datum]={h:Number(a.stunden), art:a.art||"arbeit"}; });
   S.queue.filter(q=>q.typ==="anw" && q.body.mitarbeiter_id===mid)
-         .forEach(q=>{ aus[q.body.datum]=Number(q.body.stunden); });
+         .forEach(q=>{ aus[q.body.datum]={h:Number(q.body.stunden), art:q.body.art||"arbeit"}; });
   return aus;
 }
-function tagessollVon(m){
+function abwesenheitsTage(mid, art, jahr){
+  const j = jahr || String(new Date().getFullYear());
+  const t = anwesenheitsTage(mid);
+  return Object.keys(t).filter(d=>t[d].art===art && String(d).slice(0,4)===j).length;
+}
+// Sollstunden je Wochentag, Reihenfolge So..Sa wie bei Date.getDay()
+function sollplanVon(m){
+  const roh = String((m && m.sollplan) || "").split(",").map(x=>Number(String(x).replace(",",".")));
+  if(roh.length===7 && roh.every(x=>!isNaN(x))) return roh;
   const w = Number(m && m.wochensoll)||0, d = Number(m && m.arbeitstage)||0;
-  return d>0 ? w/d : 0;
+  const proTag = d>0 ? w/d : 0;
+  const plan = [0,0,0,0,0,0,0];
+  for(let i=1;i<=Math.min(6,Math.round(d));i++) plan[i]=proTag;
+  return plan;
 }
+function sollFuerTag(m, datum){
+  return sollplanVon(m)[new Date(datum+"T12:00:00").getDay()] || 0;
+}
+function tagessollVon(m){
+  const p = sollplanVon(m);
+  const tage = p.filter(x=>x>0).length;
+  return tage ? p.reduce((a,b)=>a+b,0)/tage : 0;
+}
+function wochensollVon(m){ return sollplanVon(m).reduce((a,b)=>a+b,0); }
+const ABWESEND = {urlaub:"Urlaub", krank:"Krank", feiertag:"Feiertag"};
 function stundenkonto(mid, bis){
-  const m = person(mid); if(!m) return {saldo:0, tage:0, soll:0, ist:0};
-  const soll = tagessollVon(m);
+  const m = person(mid); if(!m) return {saldo:0, tage:0, soll:0, ist:0, urlaub:0, krank:0};
   const tage = anwesenheitsTage(mid);
-  let ist=0, n=0;
-  Object.keys(tage).forEach(d=>{ if(bis && d>bis) return; ist+=tage[d]; n++; });
-  return {saldo: Number(m.startsaldo||0) + ist - n*soll, tage:n, soll:n*soll, ist:ist};
+  let ist=0, sollSum=0, n=0;
+  Object.keys(tage).forEach(d=>{
+    if(bis && d>bis) return;
+    if(tage[d].art!=="arbeit") return;
+    ist += tage[d].h; sollSum += sollFuerTag(m, d); n++;
+  });
+  return {saldo: Number(m.startsaldo||0) + ist - sollSum, tage:n, soll:sollSum, ist:ist,
+          urlaub: abwesenheitsTage(mid,"urlaub"), krank: abwesenheitsTage(mid,"krank")};
 }
-function saldoMonat(mid, monat){   // monat = "2026-09"
+function saldoMonat(mid, monat){
   const m = person(mid); if(!m) return null;
-  const soll = tagessollVon(m);
   const tage = anwesenheitsTage(mid);
-  let ist=0, n=0;
-  Object.keys(tage).forEach(d=>{ if(String(d).slice(0,7)!==monat) return; ist+=tage[d]; n++; });
-  return n ? {saldo: ist-n*soll, tage:n, ist:ist} : null;
+  let ist=0, sollSum=0, n=0, urlaub=0;
+  Object.keys(tage).forEach(d=>{
+    if(String(d).slice(0,7)!==monat) return;
+    if(tage[d].art!=="arbeit"){ if(tage[d].art==="urlaub") urlaub++; return; }
+    ist+=tage[d].h; sollSum+=sollFuerTag(m,d); n++;
+  });
+  return (n||urlaub) ? {saldo: ist-sollSum, tage:n, ist:ist, urlaub:urlaub} : null;
 }
 function vorzeichen(v){ return (v>0?"+":"")+zahl(v,2); }
 function taet(id){ return S.taetigkeiten.find(t=>t.id===id); }
@@ -755,6 +794,30 @@ function viewTag(){
        + '<button id="uhr_stopp">Messung beenden und buchen</button></div>';
   }
 
+  const art = anwArt(S.ich.id, d);
+  h += '<div class="feld"><label for="anw_art">Was war heute?</label>'
+     + '<select id="anw_art">'
+     + '<option value="arbeit"'+(art==="arbeit"?" selected":"")+'>Gearbeitet</option>'
+     + '<option value="urlaub"'+(art==="urlaub"?" selected":"")+'>Urlaub</option>'
+     + '<option value="krank"'+(art==="krank"?" selected":"")+'>Krank</option>'
+     + '<option value="feiertag"'+(art==="feiertag"?" selected":"")+'>Feiertag</option>'
+     + '</select></div>';
+
+  if(art!=="arbeit"){
+    const mm = person(S.ich.id) || {};
+    const kk = stundenkonto(S.ich.id);
+    h += '<div class="karte"><strong>'+esc(ABWESEND[art])+'</strong>'
+      + '<p class="hinweis" style="margin:6px 0 0">Der Tag zählt weder plus noch minus auf dein Stundenkonto.</p>'
+      + (art==="urlaub"
+          ? '<div class="kennzahl" style="margin-top:8px"><span>Urlaub dieses Jahr</span><b class="zahl">'
+            + kk.urlaub+' von '+zahl(mm.urlaubstage||0,0)+' Tagen</b></div>' : '')
+      + '</div>'
+      + '<div class="konto"><span>Dein Stundenkonto</span>'
+      + '<b class="zahl" data-s="'+(kk.saldo<-0.01?"minus":(kk.saldo>0.01?"plus":"null"))+'">'
+      + vorzeichen(kk.saldo)+' h</b></div>';
+    return h;
+  }
+
   // Anwesenheit
   h += '<div class="feld"><label for="anw">Wie lange warst du da?</label>'
      + '<div class="stufen">'
@@ -772,7 +835,10 @@ function viewTag(){
     else if(Math.abs(rest)<0.01){ text="vollständig"; zustand="voll"; }
     else if(rest>0){ text=zahl(rest,2)+" h noch nicht zugeordnet"; zustand="offen"; }
     else { text=zahl(-rest,2)+" h zuviel zugeordnet"; zustand="zuviel"; }
-    h += '<div class="bilanz"><div class="oben"><span>Zugeordnet</span>'
+    const tsoll = sollFuerTag(person(S.ich.id)||{}, d);
+    h += '<div class="bilanz"><div class="oben" style="color:var(--grau);font-size:13.5px">'
+       + '<span>Sollzeit heute</span><span class="zahl">'+zahl(tsoll,2)+' h</span></div>'
+       + '<div class="oben"><span>Zugeordnet</span>'
        + '<span class="zahl">'+zahl(zug,2)+' h'+(anw!==null?' von '+zahl(anw,2)+' h':'')+'</span></div>'
        + '<div class="rest" data-s="'+zustand+'"><span>Stand</span><span class="zahl">'+esc(text)+'</span></div></div>';
   }
@@ -899,8 +965,12 @@ function viewWoche(){
   let h = '<h2>Dein Stundenkonto</h2>'
     + '<div class="karte"><div class="kontogross" data-s="'+(kto.saldo<-0.01?"minus":(kto.saldo>0.01?"plus":"null"))+'">'
     + vorzeichen(kto.saldo)+' h</div>'
-    + '<p class="hinweis" style="margin:6px 0 0;text-align:center">aus '+kto.tage+' erfassten Tagen · '
-    + zahl(m.wochensoll,2)+' h in der Woche</p></div>';
+    + '<p class="hinweis" style="margin:6px 0 0;text-align:center">aus '+kto.tage+' Arbeitstagen · '
+    + zahl(wochensollVon(m),2)+' h in der Woche</p>'
+    + '<div class="kennzahl" style="margin-top:8px"><span>Urlaub '+String(new Date().getFullYear())+'</span>'
+    + '<b class="zahl">'+kto.urlaub+' von '+zahl(m.urlaubstage||0,0)+' Tagen</b></div>'
+    + (kto.krank? '<div class="kennzahl"><span>Krank</span><b class="zahl">'+kto.krank+' Tage</b></div>':'')
+    + '</div>';
 
   const monate=[];
   for(let i=0;i<3;i++){
@@ -915,12 +985,20 @@ function viewWoche(){
         + '<b class="zahl stand" data-s="'+(x.r.saldo<-0.01?"rot":(x.r.saldo>0.01?"gruen":"grau"))+'">'+vorzeichen(x.r.saldo)+' h</b></div>';
     }).join("") + '</div>';
   }
-  h += '<p class="hinweis">Gezählt werden nur Tage, an denen du eine Anwesenheit eingetragen hast. Urlaub, Krankheit und Wochenenden zählen weder plus noch minus.</p>';
+  h += '<p class="hinweis">Gezählt werden nur Arbeitstage mit eingetragener Anwesenheit, jeweils gegen die Sollzeit des Wochentags. Urlaub, Krankheit, Feiertage und Wochenenden zählen weder plus noch minus.</p>';
 
   h+='<h2 class="abstand">Letzte sieben Tage</h2>';
 
   tage.forEach(d=>{
     const z = zeitenVon(S.ich.id,d), anw = anwesend(S.ich.id,d), zug = summe(z);
+    const aart = anwArt(S.ich.id,d);
+    if(aart!=="arbeit"){
+      h += '<button class="buchung" data-gehezu="'+d+'" style="border:1px solid var(--linie);border-radius:6px;background:var(--karte);margin-bottom:8px">'
+        + '<span class="strich" data-art="noetig"></span>'
+        + '<span class="mitte"><strong>'+wochentag(d)+', '+datumKurz(d)+'</strong>'
+        + '<small>'+esc(ABWESEND[aart])+'</small></span></button>';
+      return;
+    }
     if(!z.length && anw===null) return;
     const luecke = anw!==null && Math.abs(anw-zug)>=0.25;
     h += '<button class="buchung" data-gehezu="'+d+'" style="border:1px solid var(--linie);border-radius:6px;background:var(--karte);margin-bottom:8px">'
@@ -1005,6 +1083,14 @@ function auftraegeWerkstatt(){
   const meine = aktivA().filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)>0);
   const offen = aktivA().filter(a=>a.status!=="abgeschlossen" && meineStunden(a.id)===0);
   let h = '<h2>Woran du arbeitest</h2>';
+  if(S.notizAuftrag){
+    const na = auftrag(S.notizAuftrag);
+    if(na) return '<button class="knopf zweit" id="n_zurueck">Zurück zur Übersicht</button>'
+      + '<h2 class="abstand">'+esc(kundeName(na)||na.bezeichnung||"Auftrag")+'</h2>'
+      + '<p class="hinweis">'+esc(na.nummer)+(na.bezeichnung? ' · '+esc(na.bezeichnung):'')+'</p>'
+      + notizenHtml(na);
+    S.notizAuftrag = "";
+  }
   h += meine.length ? meine.map(a=>{
       const ps = posten(a.id);
       let k = '<div class="karte"><div class="auftragkopf"><strong>'+esc(kundeName(a)||a.bezeichnung||"Auftrag")+'</strong>'
@@ -1017,6 +1103,8 @@ function auftraegeWerkstatt(){
         if(eigene>0) k += '<div class="kennzahl" style="font-size:13.5px"><span>'+esc(x.bezeichnung)+'</span>'
           + '<b class="zahl">'+zahl(eigene,2)+' h</b></div>';
       });
+      k += '<button class="knopf zweit klein" data-notiz-auf="'+esc(a.id)+'" style="margin-top:10px">Bemerkungen ('
+        + alleNotizen().filter(n=>n.auftrag_id===a.id).length+')</button>';
       return k+'</div>';
     }).join("") : '<p class="leer">Du hast noch auf keinen Auftrag gebucht.</p>';
 
@@ -1079,6 +1167,34 @@ function geldHtml(a){
       + '<span>Kosten '+euro(g.kosten)+'</span></div>'
       + '<div class="rest" data-s="'+(g.ergebnis<0?"zuviel":(g.ergebnis>0?"voll":"offen"))+'">'
       + '<span>Ergebnis</span><span class="zahl">'+(g.ergebnis>0?"+":"")+euro(g.ergebnis)+'</span></div></div>';
+  }
+  return h;
+}
+
+function alleNotizen(){
+  return S.queue.filter(q=>q.typ==="notiz").map(q=>Object.assign({},q.body,{id:q.body.client_id,_wartet:true}))
+         .concat(S.notizen);
+}
+// Arbeitsbericht am Auftrag: für alle sichtbar
+function notizenHtml(a){
+  const liste = alleNotizen().filter(n=>n.auftrag_id===a.id)
+      .sort((x,y)=>String(y.datum).localeCompare(String(x.datum)));
+  let h = '<div class="feld"><input id="n_text_'+esc(a.id)+'" class="notizfeld" data-aid="'+esc(a.id)+'" type="text" '
+    + 'placeholder="Was wurde gemacht?" maxlength="300"></div>'
+    + '<button class="knopf zweit" data-notiz-add="'+esc(a.id)+'">Eintragen</button>';
+  if(liste.length){
+    h += '<div class="zeilen" style="margin-top:12px">'+liste.slice(0,30).map(n=>{
+      const m = person(n.mitarbeiter_id);
+      return '<div class="buchung" style="cursor:default">'
+        + '<span class="strich" data-art="wert"></span>'
+        + '<span class="mitte"><strong style="font-weight:600">'+esc(n.text)+'</strong>'
+        + '<small>'+esc(m?m.name:"—")+' · '+datumKurz(n.datum)+(n._wartet?" · wartet auf Übertragung":"")+'</small>'
+        + (!n._wartet && (S.ich.rolle==="fuehrung" || n.mitarbeiter_id===S.ich.id)
+            ? '<button class="minilink" data-notiz-weg="'+esc(n.id)+'">löschen</button>' : '')
+        + '</span></div>';
+    }).join("")+'</div>';
+  }else{
+    h += '<p class="leer">Noch keine Bemerkung.</p>';
   }
   return h;
 }
@@ -1233,6 +1349,7 @@ function viewAuftragsformular(){
       + '<p class="hinweis">Stornieren nimmt den Auftrag aus allen Listen, die Historie bleibt erhalten – das ist der normale Weg. Endgültiges Löschen entfernt auch die '
       + zahl(istStunden(f.id),1)+' gebuchten Stunden und alle Rechnungen. Diese Stunden verschwinden damit aus den Stundenkonten. Nur für Testdaten gedacht.</p>'
     : '<button class="knopf gefahr" id="a_loeschen">Auftrag löschen</button>';
+  h += block("notizen","Bemerkungen", notizenHtml(f), false);
   h += block("abschluss","Abschluss und Ergebnis",ab_h,false);
 
   h += '<button class="knopf zweit" id="a_abbrechen">Abbrechen und zurück zum Hauptmenü</button>';
@@ -1419,10 +1536,15 @@ function viewWuensche(){
       const r = wunschRechnung(w);
       const m = person(w.mitarbeiter_id);
       h += '<div class="karte"><div class="auftragkopf"><strong>'+esc(w.titel)+'</strong>'
-        + (r.kosten? '<span class="nr zahl">'+zahl(r.kosten,0)+' €</span>':'')+'</div>'
+        + (fuehrung && r.kosten? '<span class="nr zahl">'+zahl(r.kosten,0)+' €</span>':'')+'</div>'
         + (w.begruendung? '<p class="kunde">'+esc(w.begruendung)+'</p>':'')
         + '<p class="kunde">'+esc(m?m.name:"—")+'</p>';
-      if(r.ids.length){
+      if(r.ids.length && !fuehrung){
+        h += '<div class="kennzahl" style="margin-top:8px"><span>Betroffene Tätigkeiten heute</span>'
+          + '<b class="zahl">'+zahl(r.basis,2)+' h/Woche</b></div>'
+          + '<div class="kennzahl"><span>Geschätzte Ersparnis '+zahl(w.ersparnis,0)+' %</span>'
+          + '<b class="zahl">'+zahl(r.spart,2)+' h/Woche</b></div>';
+      }else if(r.ids.length){
         h += '<div class="kennzahl" style="margin-top:8px"><span>Betroffene Tätigkeiten heute</span>'
           + '<b class="zahl">'+zahl(r.basis,2)+' h/Woche</b></div>'
           + '<div class="kennzahl"><span>Geschätzte Ersparnis '+zahl(w.ersparnis,0)+' %</span>'
@@ -1743,18 +1865,22 @@ function viewVerwaltung(){
   + '<div class="karte">'
   + S.mitarbeiter.map(m=>{
       const k=stundenkonto(m.id);
-      return '<div class="kennzahl"><span>'+esc(m.name)+' ('+k.tage+' Tage)</span>'
+      return '<div class="kennzahl"><span>'+esc(m.name)+' · '+k.tage+' Tage · Urlaub '+k.urlaub+'/'+zahl(m.urlaubstage||0,0)+'</span>'
         + '<b class="zahl stand" data-s="'+(k.saldo<-0.01?"rot":(k.saldo>0.01?"gruen":"grau"))+'">'+vorzeichen(k.saldo)+' h</b></div>';
     }).join("")
   + '</div>'
   + '<div class="feld"><label for="k_person">Tagessoll und Startsaldo ändern</label>'
   + '<select id="k_person">'+S.mitarbeiter.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.name)+'</option>').join("")+'</select></div>'
-  + '<div class="zeile"><div class="feld"><label for="k_soll">Wochensoll h</label>'
-  + '<input id="k_soll" type="text" inputmode="decimal" placeholder="38,50"></div>'
-  + '<div class="feld"><label for="k_tage">Tage/Woche</label>'
-  + '<input id="k_tage" type="text" inputmode="decimal" placeholder="5"></div>'
-  + '<div class="feld"><label for="k_start">Startsaldo h</label>'
-  + '<input id="k_start" type="text" inputmode="decimal" placeholder="0,00"></div></div>'
+  + '<p class="hinweis">Sollstunden je Wochentag eintragen, zum Beispiel 8,75 von Montag bis Donnerstag und 5,00 am Freitag. Leere Felder bleiben unverändert.</p>'
+  + '<div class="zeile">'
+  + ['Mo','Di','Mi','Do','Fr'].map((t,i)=>'<div class="feld"><label for="k_d'+(i+1)+'">'+t+'</label>'
+      + '<input id="k_d'+(i+1)+'" type="text" inputmode="decimal"></div>').join("")
+  + '</div>'
+  + '<div class="zeile">'
+  + '<div class="feld"><label for="k_d6">Sa</label><input id="k_d6" type="text" inputmode="decimal"></div>'
+  + '<div class="feld"><label for="k_d0">So</label><input id="k_d0" type="text" inputmode="decimal"></div>'
+  + '<div class="feld"><label for="k_urlaub">Urlaubstage</label><input id="k_urlaub" type="text" inputmode="decimal"></div>'
+  + '<div class="feld"><label for="k_start">Startsaldo h</label><input id="k_start" type="text" inputmode="decimal"></div></div>'
   + '<button class="knopf zweit" id="k_speichern">Stundenkonto anpassen</button>'
 
   + '<h2 class="abstand">PIN ändern</h2>'
@@ -2239,7 +2365,10 @@ document.addEventListener("click", async (ev) => {
     if(pin.length<4) return melden("Bitte eine PIN mit mindestens vier Stellen");
     try{
       await sb("mitarbeiter",{method:"POST", body:{name,rolle,pin:pin,
-        wochensoll: komma(el("v_soll").value)||38.5, arbeitstage:5, startsaldo:0}, prefer:"return=minimal"});
+        wochensoll: komma(el("v_soll").value)||38.5, arbeitstage:5, startsaldo:0,
+        sollplan: (()=>{ const w=komma(el("v_soll").value)||38.5; const p=w/5;
+                         return [0,p,p,p,p,p,0].map(x=>String(Math.round(x*100)/100)).join(","); })(),
+        urlaubstage: 30}, prefer:"return=minimal"});
       await datenHolen(); melden("Person angelegt"); zeichnen();
     }catch(e){ melden(fehlertext(e)); }
     return;
@@ -2261,12 +2390,26 @@ document.addEventListener("click", async (ev) => {
   if(ist("k_speichern")){
     const mid = el("k_person").value;
     const daten = {};
-    if(el("k_soll").value.trim()!=="")  daten.wochensoll  = komma(el("k_soll").value);
-    if(el("k_tage").value.trim()!=="")  daten.arbeitstage = komma(el("k_tage").value);
-    if(el("k_start").value.trim()!=="") daten.startsaldo  = komma(el("k_start").value);
+    const m = person(mid) || {};
+    const alt = sollplanVon(m);
+    const neu = alt.slice();
+    let geaendert = false;
+    for(let i=0;i<7;i++){
+      const f = el("k_d"+i);
+      if(f && f.value.trim()!==""){
+        const v = komma(f.value);
+        if(!(v>=0 && v<=24)) return melden("Sollstunden zwischen 0 und 24");
+        neu[i]=v; geaendert=true;
+      }
+    }
+    if(geaendert){
+      daten.sollplan = neu.map(x=>String(x)).join(",");
+      daten.wochensoll = neu.reduce((a,b)=>a+b,0);
+      daten.arbeitstage = neu.filter(x=>x>0).length || 1;
+    }
+    if(el("k_urlaub").value.trim()!=="") daten.urlaubstage = komma(el("k_urlaub").value);
+    if(el("k_start").value.trim()!=="")  daten.startsaldo  = komma(el("k_start").value);
     if(!Object.keys(daten).length) return melden("Nichts einzutragen");
-    if(daten.wochensoll!==undefined && !(daten.wochensoll>0 && daten.wochensoll<=80)) return melden("Wochensoll zwischen 0 und 80");
-    if(daten.arbeitstage!==undefined && !(daten.arbeitstage>0 && daten.arbeitstage<=7)) return melden("Arbeitstage zwischen 1 und 7");
     try{
       await sb("mitarbeiter?id=eq."+encodeURIComponent(mid), {method:"PATCH", body:daten, prefer:"return=minimal"});
       await datenHolen(); melden("Stundenkonto angepasst"); zeichnen();
@@ -2351,6 +2494,32 @@ document.addEventListener("click", async (ev) => {
     return;
   }
 
+  /* --- Bemerkungen --- */
+  const nauf = t.closest("[data-notiz-auf]");
+  if(nauf){ S.notizAuftrag = nauf.dataset.notizAuf; zeichnen(); return; }
+  if(ist("n_zurueck")){ S.notizAuftrag = ""; zeichnen(); return; }
+  const nadd = t.closest("[data-notiz-add]");
+  if(nadd){
+    const aid = nadd.dataset.notizAdd;
+    const feld = document.querySelector('.notizfeld[data-aid="'+aid+'"]');
+    const txt = feld ? feld.value.trim() : "";
+    if(!txt) return melden("Bitte etwas eintragen");
+    const b = {client_id:uid(), auftrag_id:aid, mitarbeiter_id:S.ich.id, datum:heute(), text:txt};
+    const ok = await senden("notizen", b, "return=minimal,resolution=ignore-duplicates", "notiz");
+    if(ok){ await datenHolen(); melden("Eingetragen"); }
+    else melden("Offline gespeichert – wird später übertragen");
+    zeichnen(); return;
+  }
+  const nweg = t.closest("[data-notiz-weg]");
+  if(nweg){
+    if(!confirm("Bemerkung löschen?")) return;
+    try{
+      await sb("notizen?id=eq."+encodeURIComponent(nweg.dataset.notizWeg), {method:"DELETE"});
+      await datenHolen(); melden("Gelöscht"); zeichnen();
+    }catch(e){ melden(fehlertext(e)); }
+    return;
+  }
+
   /* --- Lager --- */
   if(ist("l_speichern")){
     const txt = el("l_text").value.trim();
@@ -2410,6 +2579,12 @@ document.addEventListener("change", async (ev) => {
     const v = viertel(komma(t.value));
     if(!(v>=0) || v>24){ t.value=""; return melden("Bitte einen Wert zwischen 0 und 24 eintragen"); }
     t.value=zahl(v,2); await anwesenheitSpeichern(v); return;
+  }
+  if(t.id==="anw_art"){
+    const neu = t.value;
+    const alt = anwesend(S.ich.id, S.tag);
+    await anwesenheitSpeichern(neu==="arbeit" ? (alt||0) : 0, neu);
+    return;
   }
   if(t.id==="aus_auftrag"){ S.ausAuftrag = t.value; zeichnen(); return; }
   if(t.id==="a_art" && S.aform && !S.aform.id){ S.aform.art=t.value; zeichnen(); return; }
@@ -2540,13 +2715,13 @@ async function zeitBuchen(liste){
   S.form=null; zeichnen();
 }
 
-async function anwesenheitSpeichern(std){
-  const b = {mitarbeiter_id:S.ich.id, datum:S.tag, stunden:std};
+async function anwesenheitSpeichern(std, art){
+  const b = {mitarbeiter_id:S.ich.id, datum:S.tag, stunden:std, art: art || anwArt(S.ich.id, S.tag)};
   const ok = await senden("anwesenheit?on_conflict=mitarbeiter_id,datum", b,
                           "resolution=merge-duplicates,return=minimal", "anw");
   if(ok){
     const r = S.anwesenheit.find(x=>x.mitarbeiter_id===S.ich.id && x.datum===S.tag);
-    if(r) r.stunden=std; else S.anwesenheit.push(Object.assign({},b));
+    if(r){ r.stunden=std; r.art=b.art; } else S.anwesenheit.push(Object.assign({},b));
   }
   zeichnen();
 }
@@ -2664,7 +2839,8 @@ async function excelExport(){
   // 4. Stundenkonten
   const kontoZeilen = S.mitarbeiter.map(m=>{
     const k = stundenkonto(m.id);
-    return {Mitarbeiter:m.name, Erfasste_Tage:k.tage, Anwesend:k.ist, Soll:k.soll, Saldo:k.saldo};
+    return {Mitarbeiter:m.name, Arbeitstage:k.tage, Anwesend:k.ist, Soll:k.soll, Saldo:k.saldo,
+            Urlaub_genommen:k.urlaub, Urlaub_Anspruch:Number(m.urlaubstage)||0, Kranktage:k.krank};
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(kontoZeilen), blattName("Stundenkonten", namen));
 
