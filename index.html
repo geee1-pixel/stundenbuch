@@ -216,7 +216,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 
 <nav id="nav" hidden>
   <button data-ansicht="tag">Tag</button>
-  <button data-ansicht="woche">Woche</button>
+  <button data-ansicht="woche">Stunden</button>
   <button data-ansicht="auftraege">Aufträge</button>
   <button data-ansicht="lager">Bedarf</button>
   <button data-ansicht="auswertung" data-fuehrung="1">Zahlen</button>
@@ -227,7 +227,7 @@ nav button.aktiv{color:var(--holz);border-top-color:var(--zollstock);}
 "use strict";
 
 // Beim Ändern der App hochzählen und in sw.js dieselbe Nummer eintragen.
-const VERSION = "v21";
+const VERSION = "v22";
 
 /* =====================================================================
    1. Zustand
@@ -252,6 +252,8 @@ const S = {
   aform: null,    // offenes Auftragsformular
   auftraege: [], taetigkeiten: [], mitarbeiter: [], zeiten: [], anwesenheit: [], lager: [], wuensche: [], positionen: [], kosten: [], kunden: [], notizen: [],
   reiter: "lager",
+  zr: {art:"kw", ref: heute()},   // Zeitraum in der Stundenansicht: kw | monat | jahr
+  archiv: {},                     // ältere eigene Buchungen, je Person und Jahr nachgeladen
   einst: {rueckmeldung:"0"},
   online: navigator.onLine
 };
@@ -272,6 +274,28 @@ function vorTagen(n){ return verschieben(heute(),-n); }
 function datumKurz(iso){ const t=String(iso).split("-"); return t[2]+"."+t[1]+"."; }
 function datumLang(iso){ const t=String(iso).split("-"); return t[2]+"."+t[1]+"."+t[0]; }
 function wochentag(iso){ return ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"][new Date(iso+"T12:00:00").getDay()]; }
+const MONATE = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"];
+function montagVon(iso){ const w=new Date(iso+"T12:00:00").getDay(); return verschieben(iso, -((w+6)%7)); }
+// Kalenderwoche nach ISO 8601: Montag bis Sonntag, KW 1 enthält den ersten Donnerstag
+function kwVon(iso){
+  const don = verschieben(montagVon(iso), 3);
+  const jahr = Number(don.slice(0,4));
+  const tag = Math.round((new Date(don+"T12:00:00") - new Date(jahr+"-01-01T12:00:00"))/864e5);
+  return {jahr, kw: Math.floor(tag/7)+1};
+}
+function monatsende(iso){ const d=new Date(iso.slice(0,7)+"-01T12:00:00"); d.setMonth(d.getMonth()+1); d.setDate(0); return isoVon(d); }
+function zeitraum(art, ref){
+  if(art==="jahr"){ const j=ref.slice(0,4); return {von:j+"-01-01", bis:j+"-12-31", titel:j, unter:""}; }
+  if(art==="monat"){ const v=ref.slice(0,7)+"-01"; return {von:v, bis:monatsende(v), titel:MONATE[Number(ref.slice(5,7))-1]+" "+ref.slice(0,4), unter:""}; }
+  const v=montagVon(ref), b=verschieben(v,6), k=kwVon(ref);
+  return {von:v, bis:b, titel:"KW "+k.kw+" / "+k.jahr, unter:datumKurz(v)+" – "+datumLang(b)};
+}
+function zeitraumSchritt(art, ref, n){
+  if(art==="kw") return verschieben(montagVon(ref), 7*n);
+  const d=new Date(ref.slice(0,7)+"-01T12:00:00");
+  if(art==="monat") d.setMonth(d.getMonth()+n); else d.setFullYear(d.getFullYear()+n);
+  return isoVon(d);
+}
 function uid(){ return "c"+Date.now().toString(36)+Math.random().toString(36).slice(2,9); }
 
 // Prüfsumme der PIN, damit die Anmeldung auch ohne Netz funktioniert,
@@ -508,6 +532,49 @@ function saldoMonat(mid, monat){
     ist+=tage[d].h; sollSum+=sollFuerTag(m,d); n++;
   });
   return (n||urlaub) ? {saldo: ist-sollSum, tage:n, ist:ist, urlaub:urlaub} : null;
+}
+// Zeiten werden beim Start nur für 365 Tage geladen. Ältere eigene Buchungen
+// holt die Stundenansicht je Jahr nach, wenn man dorthin blättert.
+function ladegrenze(){ return vorTagen(365); }
+async function archivHolen(mid, jahr){
+  const k = mid+"_"+jahr;
+  if(S.archiv[k]) return;
+  if(!S.cfg || !navigator.onLine){ S.archiv[k]={status:"offline", daten:[]}; return; }
+  S.archiv[k]={status:"laedt", daten:[]};
+  try{
+    const d = await sb("zeiten?select=id,client_id,auftrag_id,position_id,mitarbeiter_id,taetigkeit_id,datum,stunden,notiz,nachtrag"
+      +"&mitarbeiter_id=eq."+encodeURIComponent(mid)+"&datum=gte."+jahr+"-01-01&datum=lte."+jahr+"-12-31&order=datum.desc&limit=5000");
+    S.archiv[k]={status:"ok", daten:d||[]};
+  }catch(e){ S.archiv[k]={status:"fehler", daten:[], text:fehlertext(e)}; }
+  zeichnen();
+}
+// Eigene Buchungen im Zeitraum, inklusive nachgeladener älterer Jahre
+function meineZeitenIm(mid, von, bis){
+  const basis = alleZeiten().filter(z=>z.mitarbeiter_id===mid && z.datum>=von && z.datum<=bis);
+  if(von >= ladegrenze()) return basis;
+  const da = new Set(); basis.forEach(z=>{ da.add(String(z.id)); if(z.client_id) da.add(String(z.client_id)); });
+  const extra = [];
+  for(let j=Number(von.slice(0,4)); j<=Number(bis.slice(0,4)); j++){
+    const a = S.archiv[mid+"_"+j];
+    if(a) a.daten.forEach(z=>{ if(z.datum>=von && z.datum<=bis && !da.has(String(z.id)) && !(z.client_id && da.has(String(z.client_id)))) extra.push(z); });
+  }
+  return basis.concat(extra);
+}
+// Kennzahlen eines Zeitraums für eine Person
+function bilanzIm(mid, von, bis){
+  const m = person(mid);
+  const z = meineZeitenIm(mid, von, bis);
+  const tage = anwesenheitsTage(mid);
+  let anw=0, soll=0, arbeit=0, urlaub=0, krank=0, feiertag=0;
+  Object.keys(tage).forEach(d=>{
+    if(d<von || d>bis) return;
+    const a=tage[d].art;
+    if(a==="arbeit"){ anw+=tage[d].h; soll+=m?sollFuerTag(m,d):0; arbeit++; }
+    else if(a==="urlaub") urlaub++; else if(a==="krank") krank++; else if(a==="feiertag") feiertag++;
+  });
+  const gebucht = summe(z);
+  const werk = z.reduce((s,x)=>{ const t=taet(x.taetigkeit_id); return s+(t&&t.wertschoepfend?Number(x.stunden||0):0); },0);
+  return {z, gebucht, werk, anw, soll, saldo:anw-soll, arbeit, urlaub, krank, feiertag};
 }
 function vorzeichen(v){ return (v>0?"+":"")+zahl(v,2); }
 function taet(id){ return S.taetigkeiten.find(t=>t.id===id); }
@@ -957,11 +1024,15 @@ function viewVorlaeufig(){
   + '<button class="knopf zweit" id="v_zurueck">Zurück</button>';
 }
 
-/* ---------- Woche ---------- */
+/* ---------- Stunden: Stundenkonto und Zeitraum KW / Monat / Jahr ---------- */
+function nTage(n, wort){ return n+" "+(wort ? wort+(n===1?"tag":"tage") : (n===1?"Tag":"Tage")); }
+function farbe(v){ return v<-0.01?"rot":(v>0.01?"gruen":"grau"); }
+const ZEILE = ' style="border:1px solid var(--linie);border-radius:6px;background:var(--karte);margin-bottom:8px"';
+
 function viewWoche(){
-  const tage=[]; for(let i=0;i<7;i++) tage.push(verschieben(heute(),-i));
-  const kto = stundenkonto(S.ich.id);
-  const m = person(S.ich.id) || {wochensoll:38.5, arbeitstage:5};
+  const mid = S.ich.id;
+  const kto = stundenkonto(mid);
+  const m = person(mid) || {wochensoll:38.5, arbeitstage:5};
   let h = '<h2>Dein Stundenkonto</h2>'
     + '<div class="karte"><div class="kontogross" data-s="'+(kto.saldo<-0.01?"minus":(kto.saldo>0.01?"plus":"null"))+'">'
     + vorzeichen(kto.saldo)+' h</div>'
@@ -972,44 +1043,138 @@ function viewWoche(){
     + (kto.krank? '<div class="kennzahl"><span>Krank</span><b class="zahl">'+kto.krank+' Tage</b></div>':'')
     + '</div>';
 
-  const monate=[];
-  for(let i=0;i<3;i++){
-    const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-i);
-    monate.push(d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"));
-  }
-  const zeilen = monate.map(mo=>({mo, r:saldoMonat(S.ich.id, mo)})).filter(x=>x.r);
-  if(zeilen.length){
-    h += '<div class="karte">' + zeilen.map(x=>{
-      const nm=["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"][Number(x.mo.slice(5,7))-1];
-      return '<div class="kennzahl"><span>'+nm+' ('+x.r.tage+' Tage)</span>'
-        + '<b class="zahl stand" data-s="'+(x.r.saldo<-0.01?"rot":(x.r.saldo>0.01?"gruen":"grau"))+'">'+vorzeichen(x.r.saldo)+' h</b></div>';
-    }).join("") + '</div>';
-  }
-  h += '<p class="hinweis">Gezählt werden nur Arbeitstage mit eingetragener Anwesenheit, jeweils gegen die Sollzeit des Wochentags. Urlaub, Krankheit, Feiertage und Wochenenden zählen weder plus noch minus.</p>';
+  // Zeitraumwahl
+  const art = S.zr.art, ref = S.zr.ref;
+  const zr = zeitraum(art, ref);
+  const weiterGesperrt = zeitraumSchritt(art, ref, 1) > heute();
+  h += '<div class="reiter abstand" style="margin-top:18px">'
+    + [["kw","Woche"],["monat","Monat"],["jahr","Jahr"]].map(x=>
+        '<button data-zr-art="'+x[0]+'"'+(art===x[0]?' class="aktiv"':'')+'>'+x[1]+'</button>').join("")
+    + '</div>'
+    + '<div class="tagnav" style="margin-top:10px">'
+    + '<button data-zr-schritt="-1" aria-label="Zurück">‹</button>'
+    + '<div class="datum">'+esc(zr.titel)+'<small>'+(zr.unter||"&nbsp;")+'</small></div>'
+    + '<button data-zr-schritt="1" aria-label="Weiter"'+(weiterGesperrt?' disabled':'')+'>›</button>'
+    + '</div>';
+  if(!(zr.von<=heute() && zr.bis>=heute()))
+    h += '<p style="text-align:center;margin:-6px 0 12px"><button class="minilink" style="color:var(--holz)" data-zr-heute="1">zurück zu heute</button></p>';
 
-  h+='<h2 class="abstand">Letzte sieben Tage</h2>';
+  // ältere Jahre nachladen
+  let lade = "";
+  if(zr.von < ladegrenze()){
+    for(let j=Number(zr.von.slice(0,4)); j<=Number(zr.bis.slice(0,4)); j++){
+      const a = S.archiv[mid+"_"+j];
+      if(!a) archivHolen(mid, j);
+      else if(a.status==="laedt") lade = "Ältere Einträge werden geladen …";
+      else if(a.status==="offline") lade = "Ältere Einträge lassen sich nur mit Netz anzeigen.";
+      else if(a.status==="fehler") lade = "Ältere Einträge konnten nicht geladen werden: "+esc(a.text);
+    }
+    if(!lade && Object.keys(S.archiv).some(k=>k.indexOf(mid+"_")===0 && S.archiv[k].status==="laedt")) lade="Ältere Einträge werden geladen …";
+  }
+  if(lade) h += '<p class="hinweis" style="text-align:center">'+lade+'</p>';
 
-  tage.forEach(d=>{
-    const z = zeitenVon(S.ich.id,d), anw = anwesend(S.ich.id,d), zug = summe(z);
-    const aart = anwArt(S.ich.id,d);
+  // Kennzahlen des Zeitraums
+  const b = bilanzIm(mid, zr.von, zr.bis);
+  h += '<div class="karte">'
+    + '<div class="kennzahl"><span>Gebuchte Stunden</span><b class="zahl">'+zahl(b.gebucht,2)+' h</b></div>'
+    + '<div class="kennzahl"><span>Davon am Werkstück</span><b class="zahl">'+zahl(b.werk,2)+' h</b></div>'
+    + '<div class="kennzahl"><span>Anwesend ('+nTage(b.arbeit,"Arbeits")+')</span><b class="zahl">'+zahl(b.anw,2)+' h</b></div>'
+    + '<div class="kennzahl"><span>Plus/Minus gegen Soll</span><b class="zahl stand" data-s="'+farbe(b.saldo)+'">'+vorzeichen(b.saldo)+' h</b></div>'
+    + (b.urlaub? '<div class="kennzahl"><span>Urlaub</span><b class="zahl">'+nTage(b.urlaub)+'</b></div>':'')
+    + (b.krank? '<div class="kennzahl"><span>Krank</span><b class="zahl">'+nTage(b.krank)+'</b></div>':'')
+    + (b.feiertag? '<div class="kennzahl"><span>Feiertage</span><b class="zahl">'+nTage(b.feiertag)+'</b></div>':'')
+    + '</div>';
+
+  // Aufschlüsselung
+  if(art==="kw") h += zrTage(mid, zr);
+  else if(art==="monat") h += zrWochen(mid, zr);
+  else h += zrMonate(mid, zr);
+
+  // Nach Tätigkeit (eingeklappt)
+  if(b.z.length){
+    const je = {};
+    b.z.forEach(x=>{ const t=taet(x.taetigkeit_id); const n=t?t.name:"—"; je[n]=(je[n]||0)+Number(x.stunden||0); });
+    h += '<details class="karte" style="margin-top:6px"><summary style="cursor:pointer;font-weight:600">Nach Tätigkeit</summary>'
+      + Object.keys(je).sort((x,y)=>je[y]-je[x]).map(n=>
+          '<div class="kennzahl"><span>'+esc(n)+'</span><b class="zahl">'+zahl(je[n],2)+' h</b></div>').join("")
+      + '</details>';
+  }
+
+  h += '<p class="hinweis">Plus/Minus zählt nur Arbeitstage mit eingetragener Anwesenheit, jeweils gegen die Sollzeit des Wochentags. Urlaub, Krankheit, Feiertage und Wochenenden zählen weder plus noch minus.</p>';
+  return h;
+}
+
+// Woche: einzelne Tage, antippen öffnet den Tag
+function zrTage(mid, zr){
+  let h = "";
+  for(let i=6;i>=0;i--){
+    const d = verschieben(zr.von, i);
+    if(d>heute()) continue;
+    const z = meineZeitenIm(mid, d, d), anw = anwesend(mid,d), zug = summe(z);
+    const aart = anwArt(mid,d);
     if(aart!=="arbeit"){
-      h += '<button class="buchung" data-gehezu="'+d+'" style="border:1px solid var(--linie);border-radius:6px;background:var(--karte);margin-bottom:8px">'
+      h += '<button class="buchung" data-gehezu="'+d+'"'+ZEILE+'>'
         + '<span class="strich" data-art="noetig"></span>'
         + '<span class="mitte"><strong>'+wochentag(d)+', '+datumKurz(d)+'</strong>'
-        + '<small>'+esc(ABWESEND[aart])+'</small></span></button>';
-      return;
+        + '<small>'+esc(ABWESEND[aart]||aart)+'</small></span></button>';
+      continue;
     }
-    if(!z.length && anw===null) return;
+    if(!z.length && anw===null) continue;
     const luecke = anw!==null && Math.abs(anw-zug)>=0.25;
-    h += '<button class="buchung" data-gehezu="'+d+'" style="border:1px solid var(--linie);border-radius:6px;background:var(--karte);margin-bottom:8px">'
+    h += '<button class="buchung" data-gehezu="'+d+'"'+ZEILE+'>'
        + '<span class="strich" data-art="'+(luecke?"verlust":"wert")+'"></span>'
        + '<span class="mitte"><strong>'+wochentag(d)+', '+datumKurz(d)+'</strong>'
        + '<small>'+(anw!==null? zahl(anw,2)+" h anwesend" : "keine Anwesenheit eingetragen")
        + (luecke? " · "+zahl(anw-zug,2)+" h offen" : "")+'</small></span>'
        + '<span class="h zahl">'+zahl(zug,2)+' h</span></button>';
+  }
+  return h || '<p class="leer">In dieser Woche ist nichts erfasst.</p>';
+}
+
+// Monat: Kalenderwochen, nur mit ihren Tagen innerhalb des Monats
+function zrWochen(mid, zr){
+  let h = "";
+  const wochen = [];
+  for(let mo=montagVon(zr.von); mo<=zr.bis; mo=verschieben(mo,7)){
+    if(mo>heute()) break;
+    wochen.push(mo);
+  }
+  wochen.reverse().forEach(mo=>{
+    const von = mo<zr.von ? zr.von : mo;
+    const bisW = verschieben(mo,6), bis = bisW>zr.bis ? zr.bis : bisW;
+    const b = bilanzIm(mid, von, bis);
+    if(!b.z.length && !b.arbeit && !b.urlaub && !b.krank && !b.feiertag) return;
+    const frei = [b.urlaub?b.urlaub+" Urlaub":"", b.krank?b.krank+" krank":""].filter(Boolean).join(" · ");
+    h += '<button class="buchung" data-zr-oeffnen="kw" data-zr-ref="'+von+'"'+ZEILE+'>'
+       + '<span class="strich" data-art="'+(b.saldo<-0.01?"verlust":"wert")+'"></span>'
+       + '<span class="mitte"><strong>KW '+kwVon(mo).kw+'</strong>'
+       + '<small>'+datumKurz(von)+' – '+datumKurz(bis)+' · '+nTage(b.arbeit,"Arbeits")+' · '
+       + '<span class="stand" data-s="'+farbe(b.saldo)+'">'+vorzeichen(b.saldo)+' h</span>'
+       + (frei?' · '+frei:'')+'</small></span>'
+       + '<span class="h zahl">'+zahl(b.gebucht,2)+' h</span></button>';
   });
-  if(h.indexOf("data-gehezu")<0) h += '<p class="leer">In den letzten sieben Tagen ist nichts erfasst.</p>';
-  return h;
+  return h || '<p class="leer">In diesem Monat ist nichts erfasst.</p>';
+}
+
+// Jahr: Monate, antippen öffnet den Monat
+function zrMonate(mid, zr){
+  let h = "";
+  const j = zr.von.slice(0,4);
+  for(let i=11;i>=0;i--){
+    const von = j+"-"+String(i+1).padStart(2,"0")+"-01";
+    if(von>heute()) continue;
+    const b = bilanzIm(mid, von, monatsende(von));
+    if(!b.z.length && !b.arbeit && !b.urlaub && !b.krank && !b.feiertag) continue;
+    const frei = [b.urlaub?b.urlaub+" Urlaub":"", b.krank?b.krank+" krank":""].filter(Boolean).join(" · ");
+    h += '<button class="buchung" data-zr-oeffnen="monat" data-zr-ref="'+von+'"'+ZEILE+'>'
+       + '<span class="strich" data-art="'+(b.saldo<-0.01?"verlust":"wert")+'"></span>'
+       + '<span class="mitte"><strong>'+MONATE[i]+'</strong>'
+       + '<small>'+nTage(b.arbeit,"Arbeits")+' · '
+       + '<span class="stand" data-s="'+farbe(b.saldo)+'">'+vorzeichen(b.saldo)+' h</span>'
+       + (frei?' · '+frei:'')+'</small></span>'
+       + '<span class="h zahl">'+zahl(b.gebucht,2)+' h</span></button>';
+  }
+  return h || '<p class="leer">In diesem Jahr ist nichts erfasst.</p>';
 }
 
 /* ---------- Aufträge ---------- */
@@ -1987,6 +2152,15 @@ document.addEventListener("click", async (ev) => {
   /* --- Tageswechsel --- */
   const tb = t.closest("[data-tag]");
   if(tb){ S.tag=verschieben(S.tag, Number(tb.dataset.tag)); zeichnen(); return; }
+  /* --- Zeitraum in der Stundenansicht --- */
+  const za = t.closest("[data-zr-art]");
+  if(za){ S.zr.art=za.dataset.zrArt; zeichnen(); return; }
+  const zs = t.closest("[data-zr-schritt]");
+  if(zs){ S.zr.ref=zeitraumSchritt(S.zr.art, S.zr.ref, Number(zs.dataset.zrSchritt)); zeichnen(); window.scrollTo(0,0); return; }
+  if(t.closest("[data-zr-heute]")){ S.zr.ref=heute(); zeichnen(); return; }
+  const zo = t.closest("[data-zr-oeffnen]");
+  if(zo){ S.zr={art:zo.dataset.zrOeffnen, ref:zo.dataset.zrRef}; zeichnen(); window.scrollTo(0,0); return; }
+
   const gz = t.closest("[data-gehezu]");
   if(gz){ S.tag=gz.dataset.gehezu; S.ansicht="tag"; zeichnen(); return; }
 
